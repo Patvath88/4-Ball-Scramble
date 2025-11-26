@@ -162,7 +162,6 @@ def results_df() -> pd.DataFrame:
     return df.sort_values(by=["Points", "Player"], ascending=[False, True]).reset_index(drop=True)
 
 def ordinal_ranks_from_points(points: Dict[str, int]) -> Dict[str, int]:
-    """Strict 1..N ranks computed from current points only."""
     ordered = [p for p, _ in sorted(points.items(), key=lambda kv: (-kv[1], kv[0]))]
     return {p: i + 1 for i, p in enumerate(ordered)}
 
@@ -179,23 +178,51 @@ def combo_stats() -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values(by=["Times Teamed", "Pair"], ascending=[False, True])
 
 # ------------------------------ FUN FX (audio + animation) --------------------
-def _make_thwack_wav_bytes(duration_s: float = 0.18, sr: int = 44100) -> bytes:
+def _make_driver_wap_wav_bytes(duration_s: float = 0.28, sr: int = 44100) -> bytes:
+    """
+    'WAP' driver strike:
+    - very fast attack
+    - bright crack (2.2kHz -> 1.2kHz sweep), short decay
+    - low thump (120Hz + a touch of 60Hz), longer decay
+    - airy noise burst tail
+    """
     n = int(duration_s * sr)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(sr)
+        lp = 0.0  # simple 1-pole lowpass for shaping noise
         for i in range(n):
             t = i / sr
-            env = math.exp(-14 * t)
-            tone = math.sin(2 * math.pi * 220 * t) * 0.5 + math.sin(2 * math.pi * 1200 * t) * 0.25
-            noise = (random.random() * 2 - 1) * 0.25 * math.exp(-30 * t)
-            sample = max(-1.0, min(1.0, (tone + noise) * env))
-            wf.writeframes(struct.pack("<h", int(sample * 32767)))
+            # Envelopes
+            attack = min(1.0, t / 0.003)
+            env_crack = math.exp(-t / 0.025)
+            env_thump = math.exp(-t / 0.12)
+            env_noise = math.exp(-t / 0.09)
+
+            # Bright crack with slight down-sweep
+            f = 2200.0 - 1000.0 * t
+            crack = math.sin(2 * math.pi * f * t) * env_crack
+
+            # Low thump (clubhead mass)
+            thump = (0.75 * math.sin(2 * math.pi * 120 * t) +
+                     0.25 * math.sin(2 * math.pi * 60 * t)) * env_thump
+
+            # Airy burst (high-passed noise)
+            raw = (random.random() * 2 - 1)
+            lp = lp + 0.2 * (raw - lp)                 # low-pass
+            hp = raw - lp                              # crude high-pass
+            whoosh = hp * env_noise
+
+            # Mix & soft limit
+            sample = attack * (0.55 * crack + 0.6 * thump + 0.2 * whoosh)
+            sample = math.tanh(sample * 1.6)           # gentle saturation
+            wf.writeframes(struct.pack("<h", int(max(-1, min(1, sample)) * 32767)))
     return buf.getvalue()
 
-_THWACK_B64 = base64.b64encode(_make_thwack_wav_bytes()).decode("ascii")
+_DRIVER_WAP_B64 = base64.b64encode(_make_driver_wap_wav_bytes()).decode("ascii")
 
 def render_fx():
+    """One-shot animation + driver 'WAP' sound; then disarm."""
     rs: RoundState = st.session_state.rs
     if not rs.fx_armed: return
     rs.fx_armed = False
@@ -206,7 +233,7 @@ def render_fx():
   <div class="fx-shadow"></div>
 </div>
 <audio autoplay style="display:none">
-  <source src="data:audio/wav;base64,{_THWACK_B64}" type="audio/wav">
+  <source src="data:audio/wav;base64,{_DRIVER_WAP_B64}" type="audio/wav">
 </audio>
 """, unsafe_allow_html=True)
 
@@ -242,7 +269,7 @@ def _font(size: int):
 
 # ------------------------------ UI COMPONENTS ---------------------------------
 def chip_with_editor(player: str, points: int, rank: int) -> None:
-    """Team chip meta text only."""
+    # Why: shows place & points inline; +/- and direct edit rerun to refresh leaderboard.
     col_chip, col_plus, col_minus, col_num = st.columns([3, 1, 1, 1.3])
     with col_chip:
         st.markdown(
@@ -269,7 +296,6 @@ def team_block_editable(team_name: str, players: List[str], points: Dict[str, in
         for p in players: chip_with_editor(p, points.get(p, 0), ranks.get(p, 0))
 
 def render_leaderboard(points: Dict[str, int]) -> None:
-    """Always order by current points (desc, then name)."""
     ordered = [(p, pts) for p, pts in sorted(points.items(), key=lambda kv: (-kv[1], kv[0]))]
     st.subheader("Leaderboard")
     st.markdown("<div class='leaderboard-wrap'>", unsafe_allow_html=True)
@@ -295,7 +321,7 @@ def main():
 
     rs: RoundState = st.session_state.rs
 
-    # FX from last interaction
+    # Play FX from previous interaction
     render_fx()
 
     # Results (auto at 18)
@@ -337,7 +363,6 @@ def main():
                     except ValueError as e:
                         st.error(str(e))
                     else:
-                        # keep points for existing names; init new to 0
                         st.session_state.rs.players = players
                         st.session_state.rs.points = {p: rs.points.get(p, 0) for p in players}
                         if not any(rs.teams.values()):
@@ -354,7 +379,6 @@ def main():
     if not rs.players:
         st.info("Enter 2 or 4 names above to begin.")
     else:
-        # Recompute ranks strictly from points (so chips reflect latest order)
         ranks = ordinal_ranks_from_points(rs.points)
 
         colA, colB = st.columns(2)
@@ -374,10 +398,8 @@ def main():
         with m:
             st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
 
-        # Leaderboard — ALWAYS orders by current points
         render_leaderboard(rs.points)
 
-        # Hole log (unchanged)
         st.subheader("Hole Log")
         if rs.history:
             log_df = pd.DataFrame(rs.history)[["hole", "Team A", "Team B", "Winner"]].rename(columns={"hole": "Hole"})
