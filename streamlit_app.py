@@ -161,8 +161,9 @@ def results_df() -> pd.DataFrame:
     df = pd.DataFrame([{"Player": p, "Points": rs.points.get(p, 0)} for p in rs.players])
     return df.sort_values(by=["Points", "Player"], ascending=[False, True]).reset_index(drop=True)
 
-def ordinal_ranks(players: List[str], points: Dict[str, int]) -> Dict[str, int]:
-    ordered = sorted(players, key=lambda p: (-points.get(p, 0), p))
+def ordinal_ranks_from_points(points: Dict[str, int]) -> Dict[str, int]:
+    """Strict 1..N ranks computed from current points only."""
+    ordered = [p for p, _ in sorted(points.items(), key=lambda kv: (-kv[1], kv[0]))]
     return {p: i + 1 for i, p in enumerate(ordered)}
 
 def combo_stats() -> pd.DataFrame:
@@ -260,29 +261,30 @@ def chip_with_editor(player: str, points: int, rank: int) -> None:
         new_val = st.number_input(f"{player} pts", min_value=0, max_value=99,
                                   value=int(points), key=f"num_{player}", label_visibility="collapsed")
         if new_val != points:
-            set_point(player, new_val); st.session_state.rs.fx_armed = True
+            set_point(player, new_val); st.session_state.rs.fx_armed = True; st.rerun()
 
 def team_block_editable(team_name: str, players: List[str], points: Dict[str, int], ranks: Dict[str, int]) -> None:
     st.markdown(f"#### {team_name}")
     with st.container(border=True):
         for p in players: chip_with_editor(p, points.get(p, 0), ranks.get(p, 0))
 
-def render_leaderboard(points: Dict[str, int], players: List[str]) -> None:
-    """Sorted by points; shows only Current Place + Total Points."""
-    order = sorted(players, key=lambda p: (-points.get(p, 0), p))
+def render_leaderboard(points: Dict[str, int]) -> None:
+    """Always order by current points (desc, then name)."""
+    ordered = [(p, pts) for p, pts in sorted(points.items(), key=lambda kv: (-kv[1], kv[0]))]
     st.subheader("Leaderboard")
     st.markdown("<div class='leaderboard-wrap'>", unsafe_allow_html=True)
-    for i, p in enumerate(order, start=1):
-        pts = points.get(p, 0)
-        row_html = f"""
+    for place, (p, pts) in enumerate(ordered, start=1):
+        st.markdown(
+            f"""
 <div class="lb-row">
   <div class="lb-name">{p}</div>
   <div class="lb-lines">
-    <span class="lb-tag">Current Place: <b>{i}</b></span>
+    <span class="lb-tag">Current Place: <b>{place}</b></span>
     <span class="lb-tag">Total Points: <b>{pts}</b></span>
   </div>
-</div>"""
-        st.markdown(row_html, unsafe_allow_html=True)
+</div>""",
+            unsafe_allow_html=True,
+        )
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------ APP (one page) --------------------------------
@@ -293,10 +295,10 @@ def main():
 
     rs: RoundState = st.session_state.rs
 
-    # FX (from last interaction)
+    # FX from last interaction
     render_fx()
 
-    # Results on 18
+    # Results (auto at 18)
     if rs.show_results:
         st.success("Round complete! 🎉 Final results below.")
         df_res = results_df()
@@ -335,7 +337,12 @@ def main():
                     except ValueError as e:
                         st.error(str(e))
                     else:
-                        set_players(players); st.success("Players updated.")
+                        # keep points for existing names; init new to 0
+                        st.session_state.rs.players = players
+                        st.session_state.rs.points = {p: rs.points.get(p, 0) for p in players}
+                        if not any(rs.teams.values()):
+                            rs.teams = random_pair(players)
+                        st.success("Players updated.")
             with b2:
                 if st.button("🎲 Randomize Teams now", use_container_width=True, disabled=not rs.players):
                     rs.teams = random_pair(rs.players); rs.fx_armed = True; st.rerun()
@@ -347,7 +354,8 @@ def main():
     if not rs.players:
         st.info("Enter 2 or 4 names above to begin.")
     else:
-        ranks = ordinal_ranks(rs.players, rs.points)
+        # Recompute ranks strictly from points (so chips reflect latest order)
+        ranks = ordinal_ranks_from_points(rs.points)
 
         colA, colB = st.columns(2)
         with colA: team_block_editable("Team A", rs.teams["Team A"], rs.points, ranks)
@@ -366,10 +374,10 @@ def main():
         with m:
             st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
 
-        # Leaderboard (only place + total points)
-        render_leaderboard(rs.points, rs.players)
+        # Leaderboard — ALWAYS orders by current points
+        render_leaderboard(rs.points)
 
-        # Hole log + combo stats retained
+        # Hole log (unchanged)
         st.subheader("Hole Log")
         if rs.history:
             log_df = pd.DataFrame(rs.history)[["hole", "Team A", "Team B", "Winner"]].rename(columns={"hole": "Hole"})
