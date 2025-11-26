@@ -21,20 +21,24 @@ section.main { background: radial-gradient(1200px 600px at 10% -10%, #ffffff, #e
 .team-card{border:3px solid var(--golf-green);border-radius:16px;padding:14px;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.08)}
 .player-chip{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:999px;border:2px solid var(--golf-green);background:#fff;opacity:1 !important;margin:6px 6px}
 .player-name{font-weight:900;font-size:1.05rem;color:#0c0c0c !important}
-.score-pill{background:var(--golf-green);color:#fff;border-radius:999px;font-weight:900;min-width:36px;height:36px;padding:0 8px;display:inline-flex;align-items:center;justify-content:center}
-.podium{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:10px;align-items:end}
-.podium .slot{text-align:center;padding:10px;border-radius:10px;background:var(--sand)}
-.podium .first{height:220px;background:linear-gradient(180deg,#ffd700,#f1c40f)}
-.podium .second{height:160px;background:linear-gradient(180deg,#c0c0c0,#bdc3c7)}
-.podium .third{height:120px;background:linear-gradient(180deg,#cd7f32,#b16b28)}
+.rank-pill{background:var(--golf-green);color:#fff;border-radius:999px;font-weight:900;min-width:36px;height:36px;padding:0 8px;display:inline-flex;align-items:center;justify-content:center}
+.leaderboard{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.lb-card{border-radius:14px;padding:12px 14px;background:#fff;border:2px solid #e7e7e7;box-shadow:0 2px 10px rgba(0,0,0,.06)}
+.lb-card .title{font-weight:900;font-size:1.05rem}
+.lb-card .meta{display:flex;gap:10px;align-items:center;margin-top:6px}
+.lb-1{border-color:#f1c40f;background:linear-gradient(180deg,#fffdf0,#fff8c7)}
+.lb-2{border-color:#bdc3c7;background:linear-gradient(180deg,#ffffff,#f2f4f6)}
+.lb-3{border-color:#cd7f32;background:linear-gradient(180deg,#fff7f0,#fde0c8)}
+.lb-rank{font-weight:900;border-radius:999px;padding:6px 10px}
+.lb-1 .lb-rank{background:#f1c40f}
+.lb-2 .lb-rank{background:#bdc3c7}
+.lb-3 .lb-rank{background:#cd7f32}
 .small{color:#333;font-size:.92rem}
-/* Make primary buttons red; only End Round uses primary */
-div.stButton > button[kind="primary"]{
-  background:#c0392b;border-color:#8e2a1b;color:#fff;
-}
+/* Primary buttons -> red; used for End Round only */
+div.stButton > button[kind="primary"]{ background:#c0392b;border-color:#8e2a1b;color:#fff; }
 div.stButton > button[kind="primary"]:hover{ background:#a33224; }
 @media (prefers-color-scheme: dark){
-  .team-card,.player-chip{background:#fff}
+  .team-card,.player-chip,.lb-card{background:#fff}
   .player-name{color:#0d0d0d !important}
 }
 </style>
@@ -112,7 +116,6 @@ def set_players(players: List[str]) -> None:
         rs.teams = random_pair(players)
 
 def record_winner(team_name: str) -> None:
-    """Award, log, then auto-reroll for next hole; show results at 18."""
     rs: RoundState = st.session_state.rs
     idx = rs.current_hole - 1
     if idx < 0 or idx > 17 or rs.hole_winners[idx] is not None:
@@ -148,11 +151,35 @@ def results_df() -> pd.DataFrame:
     df = pd.DataFrame([{"Player": p, "Points": rs.points.get(p, 0)} for p in rs.players])
     return df.sort_values(by=["Points", "Player"], ascending=[False, True]).reset_index(drop=True)
 
+def dense_rank(points: Dict[str, int]) -> Dict[str, int]:
+    """Dense ranking: 1,1,2,3 for ties."""
+    sorted_players = sorted(points.items(), key=lambda kv: (-kv[1], kv[0]))
+    ranks: Dict[str, int] = {}
+    last_pts = None
+    rank = 0
+    for i, (p, pts) in enumerate(sorted_players):
+        if pts != last_pts:
+            rank += 1
+            last_pts = pts
+        ranks[p] = rank
+    return ranks
+
+def current_streak(player: str) -> int:
+    """Consecutive recent holes where player's team won."""
+    rs: RoundState = st.session_state.rs
+    streak = 0
+    for entry in reversed(rs.history):
+        winners = entry["Team A"] if entry["Winner"] == "Team A" else entry["Team B"]
+        if player in winners:
+            streak += 1
+        else:
+            break
+    return streak
+
 def combo_stats() -> pd.DataFrame:
     rs: RoundState = st.session_state.rs
     if len(rs.players) < 2:
         return pd.DataFrame(columns=["Pair", "Times Teamed", "% of 18"])
-    from itertools import combinations
     counts: Dict[Tuple[str, str], int] = {tuple(sorted(pair)): 0 for pair in combinations(rs.players, 2)}
     for entry in rs.history:
         for team in ("Team A", "Team B"):
@@ -194,12 +221,13 @@ def _font(size: int):
         return ImageFont.load_default()
 
 # ------------------------------ UI COMPONENTS ---------------------------------
-def chip_with_editor(player: str, points: int) -> None:
+def chip_with_editor(player: str, points: int, rank: int) -> None:
+    """Show rank (not points) on the chip; controls to edit points."""
     col_chip, col_plus, col_minus, col_num = st.columns([3, 1, 1, 1.3])
     with col_chip:
         st.markdown(
             f"<div class='player-chip'>🏁 <span class='player-name'>{player}</span> "
-            f"<span class='score-pill'>{points}</span></div>",
+            f"<span class='rank-pill'>{rank}</span></div>",
             unsafe_allow_html=True,
         )
     with col_plus:
@@ -214,11 +242,36 @@ def chip_with_editor(player: str, points: int) -> None:
         if new_val != points:
             set_point(player, new_val)
 
-def team_block_editable(team_name: str, players: List[str], points: Dict[str, int]) -> None:
+def team_block_editable(team_name: str, players: List[str], points: Dict[str, int], ranks: Dict[str, int]) -> None:
     st.markdown(f"#### {team_name}")
     with st.container(border=True):
         for p in players:
-            chip_with_editor(p, points.get(p, 0))
+            chip_with_editor(p, points.get(p, 0), ranks.get(p, 0))
+
+def render_leaderboard(points: Dict[str, int], players: List[str]) -> None:
+    """Cards ordered by points with rank + points + streak."""
+    ranks = dense_rank(points)
+    order = sorted(players, key=lambda p: (-points.get(p, 0), p))
+    st.subheader("Leaderboard")
+    # Fancy cards
+    st.markdown("<div class='leaderboard'>", unsafe_allow_html=True)
+    for idx, p in enumerate(order, start=1):
+        cls = "lb-1" if idx == 1 else "lb-2" if idx == 2 else "lb-3" if idx == 3 else "lb-card"
+        base_cls = f"lb-card {cls}"
+        pts = points.get(p, 0)
+        streak = current_streak(p)
+        html = f"""
+<div class="{base_cls}">
+  <div class="title">{p}</div>
+  <div class="meta">
+    <span class="lb-rank">#{ranks[p]}</span>
+    <span>Points: <b>{pts}</b></span>
+    <span>Streak: <b>{streak}</b></span>
+  </div>
+</div>
+"""
+        st.markdown(html, unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------ APP (one page) --------------------------------
 def main():
@@ -228,7 +281,7 @@ def main():
 
     rs: RoundState = st.session_state.rs
 
-    # If 18th recorded, show results block at top
+    # Results block (auto after 18)
     if rs.show_results:
         st.success("Round complete! 🎉 Final results below.")
         df_res = results_df()
@@ -289,19 +342,20 @@ def main():
                 if st.button("🎲 Randomize Teams now", use_container_width=True, disabled=not rs.players):
                     rs.teams = random_pair(rs.players); st.rerun()
         else:
-            # Show locked notice and roster
             st.markdown("**Players are locked for this round (after Hole 1). Use _End Round_ to change.**")
             roster = " • ".join(rs.players) if rs.players else "—"
             st.markdown(f"Current players: **{roster}**")
 
     if not rs.players:
         st.info("Enter 2 or 4 names above to begin.")
-        # Show End Round anyway
     else:
-        # Teams + inline point editors
+        # Compute ranks once and pass to chips
+        ranks = dense_rank(rs.points)
+
+        # Teams + inline point editors (chips show rank)
         colA, colB = st.columns(2)
-        with colA: team_block_editable("Team A", rs.teams["Team A"], rs.points)
-        with colB: team_block_editable("Team B", rs.teams["Team B"], rs.points)
+        with colA: team_block_editable("Team A", rs.teams["Team A"], rs.points, ranks)
+        with colB: team_block_editable("Team B", rs.teams["Team B"], rs.points, ranks)
 
         st.divider()
         st.subheader(f"Hole {rs.current_hole} / 18 • Record Winner (auto-randomizes next)")
@@ -315,6 +369,9 @@ def main():
                 record_winner("Team B"); st.rerun()
         with m:
             st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
+
+        # Leaderboard (ordered by points) with streaks
+        render_leaderboard(rs.points, rs.players)
 
         # Hole log
         st.subheader("Hole Log")
