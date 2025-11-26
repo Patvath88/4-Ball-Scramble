@@ -2,6 +2,7 @@
 import base64
 import io
 import math
+import os
 import random
 import struct
 import time
@@ -83,7 +84,11 @@ class RoundState:
     started_at: float
     fx_armed: bool
     fx_tick: int
-    show_end_confirm: bool  # popup flag
+    show_end_confirm: bool
+    # Audio config
+    audio_b64: Optional[str]
+    audio_mime: Optional[str]
+    use_uploaded_audio: bool
 
 def init_state() -> None:
     if "rs" not in st.session_state:
@@ -99,6 +104,9 @@ def init_state() -> None:
             fx_armed=False,
             fx_tick=0,
             show_end_confirm=False,
+            audio_b64=None,
+            audio_mime=None,
+            use_uploaded_audio=True,
         )
     upgrade_state()
 
@@ -116,6 +124,9 @@ def upgrade_state() -> None:
     if not hasattr(rs, "fx_armed"): rs.fx_armed = False
     if not hasattr(rs, "fx_tick"): rs.fx_tick = 0
     if not hasattr(rs, "show_end_confirm"): rs.show_end_confirm = False
+    if not hasattr(rs, "audio_b64"): rs.audio_b64 = None
+    if not hasattr(rs, "audio_mime"): rs.audio_mime = None
+    if not hasattr(rs, "use_uploaded_audio"): rs.use_uploaded_audio = True
 
 # ------------------------------ HELPERS ---------------------------------------
 def sanitize_players(inputs: List[str]) -> List[str]:
@@ -162,7 +173,6 @@ def record_winner(team_name: str) -> None:
         rs.teams = random_pair(rs.players)
 
 def undo_last_hole() -> None:
-    """Reverse the most recent recorded hole (points, winner, teams, hole)."""
     rs: RoundState = st.session_state.rs
     if not rs.history:
         return
@@ -207,20 +217,9 @@ def tied_rank_labels(points: Dict[str, int]) -> Tuple[Dict[str, str], Dict[str, 
             ranks[p] = rank
     return labels, ranks
 
-def combo_stats() -> pd.DataFrame:
-    rs: RoundState = st.session_state.rs
-    if len(rs.players) < 2: return pd.DataFrame(columns=["Pair", "Times Teamed", "% of 18"])
-    counts: Dict[Tuple[str, str], int] = {tuple(sorted(pair)): 0 for pair in combinations(rs.players, 2)}
-    for entry in rs.history:
-        for team in ("Team A", "Team B"):
-            for a, b in combinations(sorted(entry[team]), 2):
-                counts[(a, b)] += 1
-    rows = [{"Pair": f"{a} + {b}", "Times Teamed": n, "% of 18": round(100 * n / 18, 1)}
-            for (a, b), n in counts.items()]
-    return pd.DataFrame(rows).sort_values(by=["Times Teamed", "Pair"], ascending=[False, True])
-
-# ------------------------------ FX: Driver WAP --------------------------------
+# ------------------------------ FX: Built-in Driver WAP -----------------------
 def _make_driver_wap_wav_bytes(duration_s: float = 0.28, sr: int = 44100) -> bytes:
+    # Synthetic driver strike: crack + thump + airy burst
     n = int(duration_s * sr)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
@@ -236,27 +235,46 @@ def _make_driver_wap_wav_bytes(duration_s: float = 0.28, sr: int = 44100) -> byt
             crack = math.sin(2 * math.pi * f * t) * env_crack
             thump = (0.75 * math.sin(2 * math.pi * 120 * t) + 0.25 * math.sin(2 * math.pi * 60 * t)) * env_thump
             raw = (random.random() * 2 - 1)
-            lp = lp + 0.2 * (raw - lp)
-            hp = raw - lp
+            lp = lp + 0.2 * (raw - lp)  # low-pass
+            hp = raw - lp               # high-pass
             whoosh = hp * env_noise
             sample = math.tanh(1.6 * (attack * (0.55 * crack + 0.6 * thump + 0.2 * whoosh)))
             wf.writeframes(struct.pack("<h", int(max(-1, min(1, sample)) * 32767)))
     return buf.getvalue()
 
-_DRIVER_WAP_B64 = base64.b64encode(_make_driver_wap_wav_bytes()).decode("ascii")
+_BUILTIN_WAP_B64 = base64.b64encode(_make_driver_wap_wav_bytes()).decode("ascii")
+
+def _guess_mime(name: str) -> str:
+    ext = os.path.splitext(name or "")[1].lower()
+    if ext in (".wav",): return "audio/wav"
+    if ext in (".mp3",): return "audio/mpeg"
+    if ext in (".ogg", ".oga"): return "audio/ogg"
+    return "audio/mpeg"
+
+def set_uploaded_audio(file) -> None:
+    """Why: store Tiger clip in session as base64 without decoding."""
+    rs: RoundState = st.session_state.rs
+    content = file.read()
+    rs.audio_b64 = base64.b64encode(content).decode("ascii")
+    rs.audio_mime = _guess_mime(file.name)
+    rs.use_uploaded_audio = True
 
 def render_fx():
+    """Play Tiger clip if uploaded+enabled, else built-in synth; also show ball animation."""
     rs: RoundState = st.session_state.rs
     if not rs.fx_armed: return
     rs.fx_armed = False
     rs.fx_tick += 1
+    use_uploaded = bool(rs.use_uploaded_audio and rs.audio_b64 and rs.audio_mime)
+    b64 = rs.audio_b64 if use_uploaded else _BUILTIN_WAP_B64
+    mime = rs.audio_mime if use_uploaded else "audio/wav"
     st.markdown(f"""
 <div class="fx-area" id="fx{rs.fx_tick}">
   <div class="fx-ball"></div>
   <div class="fx-shadow"></div>
 </div>
 <audio autoplay style="display:none">
-  <source src="data:audio/wav;base64,{_DRIVER_WAP_B64}" type="audio/wav">
+  <source src="data:{mime};base64,{b64}" type="{mime}">
 </audio>
 """, unsafe_allow_html=True)
 
@@ -344,10 +362,22 @@ def main():
     st.set_page_config(page_title="Golf Random Teams", page_icon="⛳", layout="wide")
     init_state()
     st.markdown(GOLF_CSS, unsafe_allow_html=True)
-
     rs: RoundState = st.session_state.rs
 
-    # FX from previous interaction
+    # Sidebar: Tiger driver clip upload & toggle
+    with st.sidebar:
+        st.header("🎧 Sound FX")
+        f = st.file_uploader("Upload Tiger driver impact (WAV / MP3 / OGG)", type=["wav", "mp3", "ogg"])
+        if f is not None:
+            set_uploaded_audio(f)
+            st.success("Loaded custom impact sound.")
+        if rs.audio_b64:
+            rs.use_uploaded_audio = st.checkbox("Use uploaded sound", value=rs.use_uploaded_audio)
+            st.caption("Disable to use the built-in 'driver WAP' instead.")
+        else:
+            st.caption("No custom audio uploaded. Using built-in 'driver WAP'.")
+
+    # FX from last interaction
     render_fx()
 
     # Results on 18
@@ -401,7 +431,6 @@ def main():
     if not rs.players:
         st.info("Enter 2 or 4 names above to begin.")
     else:
-        # Tie-aware labels from current points
         labels, _ = tied_rank_labels(rs.points)
 
         # Teams + inline editors
@@ -421,7 +450,7 @@ def main():
                 record_winner("Team B"); rs.fx_armed = True; st.rerun()
         with actions:
             if st.button("↩️ Undo Last Hole", use_container_width=True, disabled=not rs.history):
-                undo_last_hole(); st.rerun()
+                undo_last_hole(); rs.fx_armed = True; st.rerun()
             st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
 
         # Leaderboard
@@ -439,30 +468,22 @@ def main():
     st.markdown("---")
     if st.button("🛑 End Round", type="primary", use_container_width=True):
         rs.show_end_confirm = True
-        st.experimental_rerun()
+        st.rerun()
 
     if rs.show_end_confirm:
-        # modal-like confirm
         st.markdown("<div class='confirm-mask'></div>", unsafe_allow_html=True)
         st.markdown(
             "<div class='confirm-card'><div style='font-weight:900;font-size:1.1rem'>End Round?</div>"
             "<div style='margin-top:8px'>This will <b>delete all holes, teams, and points</b> for this round.</div>"
-            "<div class='confirm-actions'>"
-            "<button class='confirm-cancel' onclick='window.location.reload()' disabled style='opacity:.01;position:absolute;left:-9999px'>noop</button>"
-            "</div></div>",  # dummy button to avoid HTML-only
-            unsafe_allow_html=True,
+            "<div class='confirm-actions'></div></div>", unsafe_allow_html=True,
         )
         c1, c2, _ = st.columns([1, 1, 2])
         with c1:
             if st.button("No, keep playing", key="cancel_end"):
-                rs.show_end_confirm = False
-                st.experimental_rerun()
+                rs.show_end_confirm = False; st.rerun()
         with c2:
             if st.button("Yes, end round (erase all)", key="confirm_end"):
-                st.session_state.pop("rs", None)
-                init_state()
-                st.success("Round reset. Enter player names to begin.")
-                st.experimental_rerun()
+                st.session_state.pop("rs", None); init_state(); st.success("Round reset. Enter player names to begin."); st.rerun()
 
 if __name__ == "__main__":
     main()
