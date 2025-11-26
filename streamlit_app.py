@@ -26,7 +26,7 @@ section.main { background: radial-gradient(1200px 600px at 10% -10%, #ffffff, #e
 .golf-hero{padding:.8rem 1rem;border-radius:12px;background:linear-gradient(135deg,var(--golf-green),var(--golf-dark));color:#fff;display:flex;align-items:center;gap:14px}
 .golf-badge{background:#ffffff22;padding:6px 10px;border-radius:10px;font-weight:800}
 
-/* Team cards + chips */
+/* Team chips */
 .team-card{border:3px solid var(--golf-green);border-radius:16px;padding:14px;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.08)}
 .player-chip{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:14px;border:2px solid var(--golf-green);background:#fff;margin:6px 6px;flex-wrap:wrap}
 .player-name{font-weight:900;font-size:1.05rem;color:#0c0c0c}
@@ -85,7 +85,6 @@ class RoundState:
     fx_armed: bool
     fx_tick: int
     show_end_confirm: bool
-    # Audio config
     audio_b64: Optional[str]
     audio_mime: Optional[str]
     use_uploaded_audio: bool
@@ -141,31 +140,28 @@ def sanitize_players(inputs: List[str]) -> List[str]:
 
 def random_pair(players: List[str]) -> Dict[str, List[str]]:
     sh = players[:]; random.shuffle(sh)
-    split = max(1, len(sh)//2)
+    split = len(sh)//2 if len(sh) >= 2 else 1
     return {"Team A": sh[:split], "Team B": sh[split:]}
 
 def set_players(players: List[str]) -> None:
     rs: RoundState = st.session_state.rs
     rs.players = players
-    rs.points = {p: rs.points.get(p, 0) for p in players}
+    rs.points = {p: rs.points.get(p, 0) for p in players}  # keep existing, init new to 0
     if not any(rs.teams.values()):
         rs.teams = random_pair(players)
 
 def record_winner(team_name: str) -> None:
-    """+1 to each winner; log; advance; re-roll; results at 18."""
+    """+1 to each winner; never resets totals here."""
     rs: RoundState = st.session_state.rs
     idx = rs.current_hole - 1
     if idx < 0 or idx > 17 or rs.hole_winners[idx] is not None:
         return
-    for p in rs.teams.get(team_name, []):
-        rs.points[p] = rs.points.get(p, 0) + 1
+    winners = rs.teams.get(team_name, [])
+    for p in winners:
+        if p in rs.players:
+            rs.points[p] = rs.points.get(p, 0) + 1
     rs.hole_winners[idx] = team_name
-    rs.history.append({
-        "hole": rs.current_hole,
-        "Team A": rs.teams["Team A"][:],
-        "Team B": rs.teams["Team B"][:],
-        "Winner": team_name,
-    })
+    rs.history.append({"hole": rs.current_hole, "Team A": rs.teams["Team A"][:], "Team B": rs.teams["Team B"][:], "Winner": team_name})
     if rs.current_hole == 18:
         rs.show_results = True
     else:
@@ -180,7 +176,8 @@ def undo_last_hole() -> None:
     hole = last["hole"]
     winner_team = last["Winner"]
     for p in last[winner_team]:
-        rs.points[p] = max(0, rs.points.get(p, 0) - 1)
+        if p in rs.players:
+            rs.points[p] = max(0, rs.points.get(p, 0) - 1)
     rs.hole_winners[hole - 1] = None
     rs.current_hole = hole
     rs.teams = {"Team A": last["Team A"], "Team B": last["Team B"]}
@@ -188,38 +185,54 @@ def undo_last_hole() -> None:
 
 def adjust_point(player: str, delta: int) -> None:
     rs: RoundState = st.session_state.rs
-    rs.points[player] = max(0, rs.points.get(player, 0) + delta)
+    if player in rs.players:
+        rs.points[player] = max(0, rs.points.get(player, 0) + delta)
 
 def set_point(player: str, value: int) -> None:
     rs: RoundState = st.session_state.rs
-    rs.points[player] = max(0, int(value))
+    if player in rs.players:
+        rs.points[player] = max(0, int(value))
 
 def results_df() -> pd.DataFrame:
     rs: RoundState = st.session_state.rs
     df = pd.DataFrame([{"Player": p, "Points": rs.points.get(p, 0)} for p in rs.players])
     return df.sort_values(by=["Points", "Player"], ascending=[False, True]).reset_index(drop=True)
 
-def tied_rank_labels(points: Dict[str, int]) -> Tuple[Dict[str, str], Dict[str, int]]:
-    """Dense ranks + human labels with ties ('T-1')."""
-    pts_to_players: Dict[int, List[str]] = {}
-    for p, pts in points.items():
-        pts_to_players.setdefault(pts, []).append(p)
-    unique_pts = sorted(pts_to_players.keys(), reverse=True)
-    labels: Dict[str, str] = {}
-    ranks: Dict[str, int] = {}
-    rank = 0
-    for pts in unique_pts:
-        rank += 1
-        group = sorted(pts_to_players[pts])
-        tied = len(group) > 1
-        for p in group:
-            labels[p] = f"T-{rank}" if tied else str(rank)
-            ranks[p] = rank
-    return labels, ranks
+def standings(players: List[str], points: Dict[str, int]) -> List[Tuple[str, int]]:
+    """Why: ensure leaderboard uses only current players and orders by points desc then name."""
+    return sorted(((p, points.get(p, 0)) for p in players), key=lambda kv: (-kv[1], kv[0]))
 
-# ------------------------------ FX: Built-in Driver WAP -----------------------
+def tied_labels(players: List[str], points: Dict[str, int]) -> Dict[str, str]:
+    """Dense ranks with ties -> 'T-#' else '#'; uses only current players."""
+    ordered = standings(players, points)
+    labels: Dict[str, str] = {}
+    rank = 0
+    i = 0
+    while i < len(ordered):
+        same = [ordered[i]]
+        j = i + 1
+        while j < len(ordered) and ordered[j][1] == ordered[i][1]:
+            same.append(ordered[j]); j += 1
+        rank += 1
+        tag = f"T-{rank}" if len(same) > 1 else str(rank)
+        for p, _ in same:
+            labels[p] = tag
+        i = j
+    return labels
+
+def combo_stats() -> pd.DataFrame:
+    rs: RoundState = st.session_state.rs
+    if len(rs.players) < 2: return pd.DataFrame(columns=["Pair", "Times Teamed", "% of 18"])
+    counts: Dict[Tuple[str, str], int] = {tuple(sorted(pair)): 0 for pair in combinations(rs.players, 2)}
+    for entry in rs.history:
+        for team in ("Team A", "Team B"):
+            for a, b in combinations(sorted([x for x in entry[team] if x in rs.players]), 2):
+                counts[(a, b)] += 1
+    rows = [{"Pair": f"{a} + {b}", "Times Teamed": n, "% of 18": round(100 * n / 18, 1)} for (a, b), n in counts.items()]
+    return pd.DataFrame(rows).sort_values(by=["Times Teamed", "Pair"], ascending=[False, True])
+
+# ------------------------------ AUDIO FX --------------------------------------
 def _make_driver_wap_wav_bytes(duration_s: float = 0.28, sr: int = 44100) -> bytes:
-    # Synthetic driver strike: crack + thump + airy burst
     n = int(duration_s * sr)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
@@ -235,8 +248,8 @@ def _make_driver_wap_wav_bytes(duration_s: float = 0.28, sr: int = 44100) -> byt
             crack = math.sin(2 * math.pi * f * t) * env_crack
             thump = (0.75 * math.sin(2 * math.pi * 120 * t) + 0.25 * math.sin(2 * math.pi * 60 * t)) * env_thump
             raw = (random.random() * 2 - 1)
-            lp = lp + 0.2 * (raw - lp)  # low-pass
-            hp = raw - lp               # high-pass
+            lp = lp + 0.2 * (raw - lp)
+            hp = raw - lp
             whoosh = hp * env_noise
             sample = math.tanh(1.6 * (attack * (0.55 * crack + 0.6 * thump + 0.2 * whoosh)))
             wf.writeframes(struct.pack("<h", int(max(-1, min(1, sample)) * 32767)))
@@ -252,7 +265,6 @@ def _guess_mime(name: str) -> str:
     return "audio/mpeg"
 
 def set_uploaded_audio(file) -> None:
-    """Why: store Tiger clip in session as base64 without decoding."""
     rs: RoundState = st.session_state.rs
     content = file.read()
     rs.audio_b64 = base64.b64encode(content).decode("ascii")
@@ -260,7 +272,6 @@ def set_uploaded_audio(file) -> None:
     rs.use_uploaded_audio = True
 
 def render_fx():
-    """Play Tiger clip if uploaded+enabled, else built-in synth; also show ball animation."""
     rs: RoundState = st.session_state.rs
     if not rs.fx_armed: return
     rs.fx_armed = False
@@ -278,7 +289,7 @@ def render_fx():
 </audio>
 """, unsafe_allow_html=True)
 
-# ------------------------------ IMAGE (results poster) ------------------------
+# ------------------------------ IMAGE (poster) --------------------------------
 def make_podium_image(df: pd.DataFrame) -> bytes:
     W, H = 900, 520
     img = Image.new("RGB", (W, H), (8, 100, 40))
@@ -337,8 +348,8 @@ def team_block_editable(team_name: str, players: List[str], points: Dict[str, in
         for p in players:
             chip_with_editor(p, points.get(p, 0), labels.get(p, "—"), labels.get(p, "").startswith("T-"))
 
-def render_leaderboard(points: Dict[str, int], labels: Dict[str, str]) -> None:
-    ordered = [(p, pts) for p, pts in sorted(points.items(), key=lambda kv: (-kv[1], kv[0]))]
+def render_leaderboard(players: List[str], points: Dict[str, int], labels: Dict[str, str]) -> None:
+    ordered = standings(players, points)
     st.subheader("Leaderboard")
     st.markdown("<div class='leaderboard-wrap'>", unsafe_allow_html=True)
     for p, pts in ordered:
@@ -364,40 +375,25 @@ def main():
     st.markdown(GOLF_CSS, unsafe_allow_html=True)
     rs: RoundState = st.session_state.rs
 
-    # Sidebar: Tiger driver clip upload & toggle
+    # Sidebar: audio upload/toggle
     with st.sidebar:
         st.header("🎧 Sound FX")
         f = st.file_uploader("Upload Tiger driver impact (WAV / MP3 / OGG)", type=["wav", "mp3", "ogg"])
         if f is not None:
-            set_uploaded_audio(f)
-            st.success("Loaded custom impact sound.")
+            set_uploaded_audio(f); st.success("Loaded custom impact sound.")
         if rs.audio_b64:
             rs.use_uploaded_audio = st.checkbox("Use uploaded sound", value=rs.use_uploaded_audio)
             st.caption("Disable to use the built-in 'driver WAP' instead.")
         else:
             st.caption("No custom audio uploaded. Using built-in 'driver WAP'.")
 
-    # FX from last interaction
+    # Play pending FX
     render_fx()
-
-    # Results on 18
-    if rs.show_results:
-        st.success("Round complete! 🎉 Final results below.")
-        df_res = results_df()
-        st.dataframe(df_res, use_container_width=True, hide_index=True)
-        png = make_podium_image(df_res)
-        st.download_button("🖼️ Save Results Poster (PNG)", data=png, file_name="golf_results.png", mime="image/png")
-        st.download_button("📄 Save Standings (CSV)", data=df_res.to_csv(index=False).encode("utf-8"),
-                           file_name="golf_standings.csv", mime="text/csv")
-        if rs.history:
-            st.download_button("📄 Save Hole Log (CSV)",
-                               data=pd.DataFrame(rs.history).to_csv(index=False).encode("utf-8"),
-                               file_name="golf_hole_log.csv", mime="text/csv")
 
     # Header
     st.markdown(f'<div class="golf-hero">{GOLF_SVG}'
                 f'<div><div class="golf-badge">Random Teams • Score • Live Leaderboard</div>'
-                f'<div style="opacity:.9">Auto randomize after each hole • Names lock after Hole 1 • Undo & Confirm Reset</div></div></div>',
+                f'<div style="opacity:.9">Every winning teammate gets +1 • Auto-randomize after each hole • Undo & Confirm Reset</div></div></div>',
                 unsafe_allow_html=True)
 
     # Player inputs (hide after Hole 1 is recorded)
@@ -430,45 +426,46 @@ def main():
 
     if not rs.players:
         st.info("Enter 2 or 4 names above to begin.")
+        return
+
+    # Tie-aware labels from current players & points
+    labels = tied_labels(rs.players, rs.points)
+
+    # Teams + inline editors
+    colA, colB = st.columns(2)
+    with colA: team_block_editable("Team A", rs.teams["Team A"], rs.points, labels)
+    with colB: team_block_editable("Team B", rs.teams["Team B"], rs.points, labels)
+
+    st.divider()
+    st.subheader(f"Hole {rs.current_hole} / 18 • Record Winner (auto-randomizes next)")
+    disabled = rs.hole_winners[rs.current_hole-1] is not None if 1 <= rs.current_hole <= 18 else True
+    wA, wB, actions = st.columns([1, 1, 2])
+    with wA:
+        if st.button("🏆 Team A won", use_container_width=True, disabled=disabled or rs.show_results):
+            record_winner("Team A"); rs.fx_armed = True; st.rerun()
+    with wB:
+        if st.button("🏆 Team B won", use_container_width=True, disabled=disabled or rs.show_results):
+            record_winner("Team B"); rs.fx_armed = True; st.rerun()
+    with actions:
+        if st.button("↩️ Undo Last Hole", use_container_width=True, disabled=not rs.history):
+            undo_last_hole(); rs.fx_armed = True; st.rerun()
+        st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
+
+    # Leaderboard (strictly by personal totals)
+    render_leaderboard(rs.players, rs.points, labels)
+
+    # Hole log
+    st.subheader("Hole Log")
+    if rs.history:
+        log_df = pd.DataFrame(rs.history)[["hole", "Team A", "Team B", "Winner"]].rename(columns={"hole": "Hole"})
+        st.dataframe(log_df, use_container_width=True, hide_index=True)
     else:
-        labels, _ = tied_rank_labels(rs.points)
-
-        # Teams + inline editors
-        colA, colB = st.columns(2)
-        with colA: team_block_editable("Team A", rs.teams["Team A"], rs.points, labels)
-        with colB: team_block_editable("Team B", rs.teams["Team B"], rs.points, labels)
-
-        st.divider()
-        st.subheader(f"Hole {rs.current_hole} / 18 • Record Winner (auto-randomizes next)")
-        disabled = rs.hole_winners[rs.current_hole-1] is not None if 1 <= rs.current_hole <= 18 else True
-        wA, wB, actions = st.columns([1, 1, 2])
-        with wA:
-            if st.button("🏆 Team A won", use_container_width=True, disabled=disabled or rs.show_results):
-                record_winner("Team A"); rs.fx_armed = True; st.rerun()
-        with wB:
-            if st.button("🏆 Team B won", use_container_width=True, disabled=disabled or rs.show_results):
-                record_winner("Team B"); rs.fx_armed = True; st.rerun()
-        with actions:
-            if st.button("↩️ Undo Last Hole", use_container_width=True, disabled=not rs.history):
-                undo_last_hole(); rs.fx_armed = True; st.rerun()
-            st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
-
-        # Leaderboard
-        render_leaderboard(rs.points, labels)
-
-        # Hole log
-        st.subheader("Hole Log")
-        if rs.history:
-            log_df = pd.DataFrame(rs.history)[["hole", "Team A", "Team B", "Winner"]].rename(columns={"hole": "Hole"})
-            st.dataframe(log_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("No holes recorded yet.")
+        st.info("No holes recorded yet.")
 
     # --- End Round with confirmation ------------------------------------------
     st.markdown("---")
     if st.button("🛑 End Round", type="primary", use_container_width=True):
-        rs.show_end_confirm = True
-        st.rerun()
+        rs.show_end_confirm = True; st.rerun()
 
     if rs.show_end_confirm:
         st.markdown("<div class='confirm-mask'></div>", unsafe_allow_html=True)
