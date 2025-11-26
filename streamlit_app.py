@@ -1,7 +1,11 @@
 # file: streamlit_app.py
+import base64
 import io
+import math
 import random
+import struct
 import time
+import wave
 from dataclasses import dataclass
 from itertools import combinations
 from typing import Dict, List, Optional, Tuple
@@ -10,7 +14,7 @@ import pandas as pd
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
-# -------------------------- THEME (higher contrast + dark leaderboard) --------
+# -------------------------- THEME (dark leaderboard + animations) -------------
 GOLF_CSS = """
 <style>
 :root { --golf-green:#0b7a24; --golf-dark:#064a15; --sand:#f3e6c1; --ink:#0b0e11; }
@@ -21,12 +25,11 @@ section.main { background: radial-gradient(1200px 600px at 10% -10%, #ffffff, #e
 .golf-hero{padding:.8rem 1rem;border-radius:12px;background:linear-gradient(135deg,var(--golf-green),var(--golf-dark));color:#fff;display:flex;align-items:center;gap:14px}
 .golf-badge{background:#ffffff22;padding:6px 10px;border-radius:10px;font-weight:800}
 
-/* Team cards + chips (stay light for contrast against dark page) */
+/* Team cards + chips */
 .team-card{border:3px solid var(--golf-green);border-radius:16px;padding:14px;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.08)}
-.player-chip{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:999px;border:2px solid var(--golf-green);background:#fff;opacity:1 !important;margin:6px 6px}
+.player-chip{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:14px;border:2px solid var(--golf-green);background:#fff;opacity:1 !important;margin:6px 6px;flex-wrap:wrap}
 .player-name{font-weight:900;font-size:1.05rem;color:#0c0c0c !important}
-.rank-pill{border-radius:999px;font-weight:900;min-width:36px;height:36px;padding:0 10px;display:inline-flex;align-items:center;justify-content:center;
-           font-family:'Impact','Arial Black','Trebuchet MS',system-ui,sans-serif;background:#0b7a24;color:#fff}
+.player-meta{font-weight:800; color:#0b7a24; background:#eaf7e7; border:1px solid #bde0c2; border-radius:999px; padding:4px 10px;}
 
 /* --- DARK LEADERBOARD --- */
 .leaderboard-wrap{margin-top:.2rem}
@@ -44,18 +47,23 @@ section.main { background: radial-gradient(1200px 600px at 10% -10%, #ffffff, #e
 .medal.plain{background:transparent;border:3px solid #3a4452;color:#eef2f7;box-shadow:none}
 
 .lb-name{font-family:'Trebuchet MS','Segoe UI',system-ui,sans-serif;font-weight:900;font-size:1.2rem;letter-spacing:.2px;color:#fff}
-.lb-meta{display:flex;gap:16px;margin-top:4px;color:#cfd7e3;font-weight:600}
+.lb-meta{display:flex;gap:16px;margin-top:4px;color:#cfd7e3;font-weight:700}
 .lb-meta span{background:#0e1218;border:1px solid #263141;border-radius:999px;padding:4px 10px}
 
 /* Primary buttons -> red for End Round only */
 div.stButton > button[kind="primary"]{ background:#c0392b;border-color:#8e2a1b;color:#fff; }
 div.stButton > button[kind="primary"]:hover{ background:#a33224; }
 
-.small{color:#333;font-size:.92rem}
-@media (prefers-color-scheme: dark){
-  .team-card,.player-chip{background:#fff}
-  .player-name{color:#0d0d0d !important}
-}
+/* --- Golf FX animation (shown right after a button press) --- */
+.fx-area{position:relative;height:80px;overflow:hidden;margin:.2rem 0 .6rem 0}
+.fx-ball{position:absolute;left:-60px;top:40px;width:18px;height:18px;border-radius:50%;
+         background:radial-gradient(circle at 40% 35%, #fff, #dcdcdc);
+         box-shadow:0 2px 0 #bcbcbc; animation:drive .9s ease-out forwards, spin .9s linear}
+.fx-shadow{position:absolute;left:-60px;top:59px;width:22px;height:6px;border-radius:50%;
+           background:rgba(0,0,0,.25);filter:blur(2px);animation:shadowDrive .9s ease-out forwards}
+@keyframes drive{0%{transform:translate(0,0)} 30%{transform:translate(220px,-36px)} 70%{transform:translate(700px,-6px)} 100%{transform:translate(1100px,6px)}}
+@keyframes shadowDrive{0%{transform:translate(0,0) scale(.6)} 30%{transform:translate(220px,6px) scale(1)} 100%{transform:translate(1100px,8px) scale(.8)}}
+@keyframes spin{0%{transform:rotate(0)} 100%{transform:rotate(420deg)}}
 </style>
 """
 
@@ -80,6 +88,8 @@ class RoundState:
     history: List[Dict]
     show_results: bool
     started_at: float
+    fx_armed: bool
+    fx_tick: int
 
 def init_state() -> None:
     if "rs" not in st.session_state:
@@ -92,6 +102,8 @@ def init_state() -> None:
             history=[],
             show_results=False,
             started_at=time.time(),
+            fx_armed=False,
+            fx_tick=0,
         )
     upgrade_state()
 
@@ -106,6 +118,8 @@ def upgrade_state() -> None:
     if not hasattr(rs, "points") or not isinstance(rs.points, dict): rs.points = {}
     if not hasattr(rs, "players"): rs.players = []
     if not hasattr(rs, "started_at"): rs.started_at = time.time()
+    if not hasattr(rs, "fx_armed"): rs.fx_armed = False
+    if not hasattr(rs, "fx_tick"): rs.fx_tick = 0
 
 # ------------------------------ HELPERS ---------------------------------------
 def sanitize_players(inputs: List[str]) -> List[str]:
@@ -159,7 +173,6 @@ def results_df() -> pd.DataFrame:
     return df.sort_values(by=["Points", "Player"], ascending=[False, True]).reset_index(drop=True)
 
 def ordinal_ranks(players: List[str], points: Dict[str, int]) -> Dict[str, int]:
-    """Strict 1..N ranks (ties resolved by name)."""
     ordered = sorted(players, key=lambda p: (-points.get(p, 0), p))
     return {p: i + 1 for i, p in enumerate(ordered)}
 
@@ -168,10 +181,8 @@ def current_streak(player: str) -> int:
     streak = 0
     for entry in reversed(rs.history):
         winners = entry["Team A"] if entry["Winner"] == "Team A" else entry["Team B"]
-        if player in winners:
-            streak += 1
-        else:
-            break
+        if player in winners: streak += 1
+        else: break
     return streak
 
 def combo_stats() -> pd.DataFrame:
@@ -182,9 +193,47 @@ def combo_stats() -> pd.DataFrame:
         for team in ("Team A", "Team B"):
             for a, b in combinations(sorted(entry[team]), 2):
                 counts[(a, b)] += 1
-    rows = [{"Pair": f"{a} + {b}", "Times Teamed": n, "% of 18": round(100 * n / 18, 1)} for (a, b), n in counts.items()]
+    rows = [{"Pair": f"{a} + {b}", "Times Teamed": n, "% of 18": round(100 * n / 18, 1)}
+            for (a, b), n in counts.items()]
     return pd.DataFrame(rows).sort_values(by=["Times Teamed", "Pair"], ascending=[False, True])
 
+# ------------------------------ FUN FX (audio + animation) --------------------
+def _make_thwack_wav_bytes(duration_s: float = 0.18, sr: int = 44100) -> bytes:
+    """Simple synthetic 'thwack' (two tones + noise burst with fast decay)."""
+    n = int(duration_s * sr)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(sr)
+        for i in range(n):
+            t = i / sr
+            env = math.exp(-14 * t)  # fast decay
+            tone = math.sin(2 * math.pi * 220 * t) * 0.5 + math.sin(2 * math.pi * 1200 * t) * 0.25
+            noise = (random.random() * 2 - 1) * 0.25 * math.exp(-30 * t)
+            sample = max(-1.0, min(1.0, (tone + noise) * env))
+            wf.writeframes(struct.pack("<h", int(sample * 32767)))
+    return buf.getvalue()
+
+_THWACK_B64 = base64.b64encode(_make_thwack_wav_bytes()).decode("ascii")
+
+def render_fx():
+    """If armed, show one-shot animation + play thwack; then disarm."""
+    rs: RoundState = st.session_state.rs
+    if not rs.fx_armed:
+        return
+    rs.fx_armed = False
+    rs.fx_tick += 1
+    # Animation (re-renders each tick)
+    st.markdown(f"""
+<div class="fx-area" id="fx{rs.fx_tick}">
+  <div class="fx-ball"></div>
+  <div class="fx-shadow"></div>
+</div>
+<audio autoplay style="display:none">
+  <source src="data:audio/wav;base64,{_THWACK_B64}" type="audio/wav">
+</audio>
+""", unsafe_allow_html=True)
+
+# ------------------------------ IMAGES ----------------------------------------
 def make_podium_image(df: pd.DataFrame) -> bytes:
     W, H = 900, 520
     img = Image.new("RGB", (W, H), (8, 100, 40))
@@ -216,26 +265,25 @@ def _font(size: int):
 
 # ------------------------------ UI COMPONENTS ---------------------------------
 def chip_with_editor(player: str, points: int, rank: int) -> None:
-    """Show ordinal rank on chip; quick +/- & direct edit."""
+    """No rank bubble; show meta text 'Current Place: X • Total Points: Y'."""
     col_chip, col_plus, col_minus, col_num = st.columns([3, 1, 1, 1.3])
     with col_chip:
-        # Medal color only for 1..3; 4 has plain dark badge
-        cls = "gold" if rank == 1 else "silver" if rank == 2 else "bronze" if rank == 3 else "plain"
         st.markdown(
             f"<div class='player-chip'>🏁 <span class='player-name'>{player}</span> "
-            f"<span class='rank-pill'>{rank}</span></div>",
+            f"<span class='player-meta'>Current Place: {rank} &nbsp;•&nbsp; Total Points: {points}</span></div>",
             unsafe_allow_html=True,
         )
     with col_plus:
         if st.button("➕", key=f"inc_{player}", use_container_width=True):
-            adjust_point(player, +1); st.rerun()
+            adjust_point(player, +1); st.session_state.rs.fx_armed = True; st.rerun()
     with col_minus:
         if st.button("➖", key=f"dec_{player}", use_container_width=True):
-            adjust_point(player, -1); st.rerun()
+            adjust_point(player, -1); st.session_state.rs.fx_armed = True; st.rerun()
     with col_num:
         new_val = st.number_input(f"{player} pts", min_value=0, max_value=99,
                                   value=int(points), key=f"num_{player}", label_visibility="collapsed")
-        if new_val != points: set_point(player, new_val)
+        if new_val != points:
+            set_point(player, new_val); st.session_state.rs.fx_armed = True
 
 def team_block_editable(team_name: str, players: List[str], points: Dict[str, int], ranks: Dict[str, int]) -> None:
     st.markdown(f"#### {team_name}")
@@ -243,7 +291,6 @@ def team_block_editable(team_name: str, players: List[str], points: Dict[str, in
         for p in players: chip_with_editor(p, points.get(p, 0), ranks.get(p, 0))
 
 def render_leaderboard(points: Dict[str, int], players: List[str]) -> None:
-    """Dark, high-contrast; left medal shows 1..4 (gold/silver/bronze/plain)."""
     ranks = ordinal_ranks(players, points)
     order = sorted(players, key=lambda p: (-points.get(p, 0), p))
     st.subheader("Leaderboard")
@@ -271,7 +318,11 @@ def main():
     st.set_page_config(page_title="Golf Round – One Page", page_icon="⛳", layout="wide")
     init_state()
     st.markdown(GOLF_CSS, unsafe_allow_html=True)
+
     rs: RoundState = st.session_state.rs
+
+    # Render FX if armed from last interaction
+    render_fx()
 
     # Results auto on 18
     if rs.show_results:
@@ -299,7 +350,7 @@ def main():
     # Header
     st.markdown(f'<div class="golf-hero">{GOLF_SVG}'
                 f'<div><div class="golf-badge">Golf Round – Teams & Score</div>'
-                f'<div class="small">Randomize every hole • Names lock after Hole 1 • End Round resets</div></div></div>',
+                f'<div class="small">Randomize every hole • Names lock after Hole 1 • End Round resets • FX on click</div></div></div>',
                 unsafe_allow_html=True)
 
     # Names disappear after first hole recorded
@@ -321,13 +372,10 @@ def main():
                     except ValueError as e:
                         st.error(str(e))
                     else:
-                        set_players(players)
-                        if not rs.history:
-                            rs.teams = random_pair(players)
-                        st.success("Players updated.")
+                        set_players(players); st.success("Players updated.")
             with b2:
                 if st.button("🎲 Randomize Teams now", use_container_width=True, disabled=not rs.players):
-                    rs.teams = random_pair(rs.players); st.rerun()
+                    rs.teams = random_pair(rs.players); rs.fx_armed = True; st.rerun()
         else:
             st.markdown("**Players are locked for this round (after Hole 1). Use _End Round_ to change.**")
             roster = " • ".join(rs.players) if rs.players else "—"
@@ -348,14 +396,14 @@ def main():
         wA, wB, m = st.columns([1, 1, 2])
         with wA:
             if st.button("🏆 Team A won", use_container_width=True, disabled=disabled or rs.show_results):
-                record_winner("Team A"); st.rerun()
+                record_winner("Team A"); rs.fx_armed = True; st.rerun()
         with wB:
             if st.button("🏆 Team B won", use_container_width=True, disabled=disabled or rs.show_results):
-                record_winner("Team B"); st.rerun()
+                record_winner("Team B"); rs.fx_armed = True; st.rerun()
         with m:
             st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
 
-        # Leaderboard (dark, readable, fun font) — numbers on left are 1–4
+        # Leaderboard (dark, readable, fun font)
         render_leaderboard(rs.points, rs.players)
 
         # Hole log
@@ -369,7 +417,7 @@ def main():
     # End Round
     st.markdown("---")
     if st.button("🛑 End Round", type="primary", use_container_width=True, help="Reset everything and start fresh"):
-        st.session_state.pop("rs", None); init_state(); st.success("Round reset. Enter player names to begin."); st.rerun()
+        st.session_state.pop("rs", None); init_state(); st.session_state.rs.fx_armed = True; st.success("Round reset. Enter player names to begin."); st.rerun()
 
 if __name__ == "__main__":
     main()
