@@ -10,35 +10,50 @@ import pandas as pd
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
-# -------------------------- THEME (high-contrast) -----------------------------
+# -------------------------- THEME (higher contrast + dark leaderboard) --------
 GOLF_CSS = """
 <style>
-:root { --golf-green:#0b7a24; --golf-dark:#064a15; --sand:#f3e6c1; }
+:root { --golf-green:#0b7a24; --golf-dark:#064a15; --sand:#f3e6c1; --ink:#0b0e11; }
 section.main { background: radial-gradient(1200px 600px at 10% -10%, #ffffff, #eaf7e7) }
 .block-container { padding-top: 0.8rem; }
+
+/* Header */
 .golf-hero{padding:.8rem 1rem;border-radius:12px;background:linear-gradient(135deg,var(--golf-green),var(--golf-dark));color:#fff;display:flex;align-items:center;gap:14px}
 .golf-badge{background:#ffffff22;padding:6px 10px;border-radius:10px;font-weight:800}
+
+/* Team cards + chips (stay light for contrast against dark page) */
 .team-card{border:3px solid var(--golf-green);border-radius:16px;padding:14px;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.08)}
 .player-chip{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:999px;border:2px solid var(--golf-green);background:#fff;opacity:1 !important;margin:6px 6px}
 .player-name{font-weight:900;font-size:1.05rem;color:#0c0c0c !important}
-.rank-pill{background:var(--golf-green);color:#fff;border-radius:999px;font-weight:900;min-width:36px;height:36px;padding:0 8px;display:inline-flex;align-items:center;justify-content:center}
-.leaderboard{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
-.lb-card{border-radius:14px;padding:12px 14px;background:#fff;border:2px solid #e7e7e7;box-shadow:0 2px 10px rgba(0,0,0,.06)}
-.lb-card .title{font-weight:900;font-size:1.05rem}
-.lb-card .meta{display:flex;gap:10px;align-items:center;margin-top:6px}
-.lb-1{border-color:#f1c40f;background:linear-gradient(180deg,#fffdf0,#fff8c7)}
-.lb-2{border-color:#bdc3c7;background:linear-gradient(180deg,#ffffff,#f2f4f6)}
-.lb-3{border-color:#cd7f32;background:linear-gradient(180deg,#fff7f0,#fde0c8)}
-.lb-rank{font-weight:900;border-radius:999px;padding:6px 10px}
-.lb-1 .lb-rank{background:#f1c40f}
-.lb-2 .lb-rank{background:#bdc3c7}
-.lb-3 .lb-rank{background:#cd7f32}
-.small{color:#333;font-size:.92rem}
-/* Primary buttons -> red; used for End Round only */
+.rank-pill{border-radius:999px;font-weight:900;min-width:36px;height:36px;padding:0 10px;display:inline-flex;align-items:center;justify-content:center;
+           font-family:'Impact','Arial Black','Trebuchet MS',system-ui,sans-serif;background:#0b7a24;color:#fff}
+
+/* --- DARK LEADERBOARD --- */
+.leaderboard-wrap{margin-top:.2rem}
+.lb-row{display:grid;grid-template-columns:64px 1fr;gap:12px;align-items:center;
+       border-radius:18px;padding:12px 14px;background:#12161c;border:2px solid #1f2630;
+       box-shadow:0 6px 22px rgba(0,0,0,.25); color:#eef2f7;}
+.lb-row + .lb-row{margin-top:10px}
+.lb-left{display:flex;align-items:center;justify-content:center}
+.medal{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+      font-weight:900;color:#111;box-shadow:inset 0 -4px 8px rgba(0,0,0,.25),0 2px 6px rgba(0,0,0,.35);
+      font-family:'Impact','Arial Black','Trebuchet MS',system-ui,sans-serif}
+.medal.gold{background:#f1c40f;border:3px solid #9a7d0a;color:#111}
+.medal.silver{background:#bdc3c7;border:3px solid #7f8c8d;color:#111}
+.medal.bronze{background:#cd7f32;border:3px solid #8a4f1d;color:#111}
+.medal.plain{background:transparent;border:3px solid #3a4452;color:#eef2f7;box-shadow:none}
+
+.lb-name{font-family:'Trebuchet MS','Segoe UI',system-ui,sans-serif;font-weight:900;font-size:1.2rem;letter-spacing:.2px;color:#fff}
+.lb-meta{display:flex;gap:16px;margin-top:4px;color:#cfd7e3;font-weight:600}
+.lb-meta span{background:#0e1218;border:1px solid #263141;border-radius:999px;padding:4px 10px}
+
+/* Primary buttons -> red for End Round only */
 div.stButton > button[kind="primary"]{ background:#c0392b;border-color:#8e2a1b;color:#fff; }
 div.stButton > button[kind="primary"]:hover{ background:#a33224; }
+
+.small{color:#333;font-size:.92rem}
 @media (prefers-color-scheme: dark){
-  .team-card,.player-chip,.lb-card{background:#fff}
+  .team-card,.player-chip{background:#fff}
   .player-name{color:#0d0d0d !important}
 }
 </style>
@@ -61,8 +76,8 @@ class RoundState:
     teams: Dict[str, List[str]]
     points: Dict[str, int]
     current_hole: int
-    hole_winners: List[Optional[str]]              # "Team A" | "Team B" | None
-    history: List[Dict]                            # [{'hole':n,'Team A':[],'Team B':[],'Winner':str}]
+    hole_winners: List[Optional[str]]
+    history: List[Dict]
     show_results: bool
     started_at: float
 
@@ -120,18 +135,10 @@ def record_winner(team_name: str) -> None:
     idx = rs.current_hole - 1
     if idx < 0 or idx > 17 or rs.hole_winners[idx] is not None:
         return
-    # award
     for p in rs.teams.get(team_name, []):
         rs.points[p] = rs.points.get(p, 0) + 1
-    # log
     rs.hole_winners[idx] = team_name
-    rs.history.append({
-        "hole": rs.current_hole,
-        "Team A": rs.teams["Team A"][:],
-        "Team B": rs.teams["Team B"][:],
-        "Winner": team_name,
-    })
-    # next
+    rs.history.append({"hole": rs.current_hole, "Team A": rs.teams["Team A"][:], "Team B": rs.teams["Team B"][:], "Winner": team_name})
     if rs.current_hole == 18:
         rs.show_results = True
     else:
@@ -151,21 +158,12 @@ def results_df() -> pd.DataFrame:
     df = pd.DataFrame([{"Player": p, "Points": rs.points.get(p, 0)} for p in rs.players])
     return df.sort_values(by=["Points", "Player"], ascending=[False, True]).reset_index(drop=True)
 
-def dense_rank(points: Dict[str, int]) -> Dict[str, int]:
-    """Dense ranking: 1,1,2,3 for ties."""
-    sorted_players = sorted(points.items(), key=lambda kv: (-kv[1], kv[0]))
-    ranks: Dict[str, int] = {}
-    last_pts = None
-    rank = 0
-    for i, (p, pts) in enumerate(sorted_players):
-        if pts != last_pts:
-            rank += 1
-            last_pts = pts
-        ranks[p] = rank
-    return ranks
+def ordinal_ranks(players: List[str], points: Dict[str, int]) -> Dict[str, int]:
+    """Strict 1..N ranks (ties resolved by name)."""
+    ordered = sorted(players, key=lambda p: (-points.get(p, 0), p))
+    return {p: i + 1 for i, p in enumerate(ordered)}
 
 def current_streak(player: str) -> int:
-    """Consecutive recent holes where player's team won."""
     rs: RoundState = st.session_state.rs
     streak = 0
     for entry in reversed(rs.history):
@@ -178,15 +176,13 @@ def current_streak(player: str) -> int:
 
 def combo_stats() -> pd.DataFrame:
     rs: RoundState = st.session_state.rs
-    if len(rs.players) < 2:
-        return pd.DataFrame(columns=["Pair", "Times Teamed", "% of 18"])
+    if len(rs.players) < 2: return pd.DataFrame(columns=["Pair", "Times Teamed", "% of 18"])
     counts: Dict[Tuple[str, str], int] = {tuple(sorted(pair)): 0 for pair in combinations(rs.players, 2)}
     for entry in rs.history:
         for team in ("Team A", "Team B"):
             for a, b in combinations(sorted(entry[team]), 2):
                 counts[(a, b)] += 1
-    rows = [{"Pair": f"{a} + {b}", "Times Teamed": n, "% of 18": round(100 * n / 18, 1)}
-            for (a, b), n in counts.items()]
+    rows = [{"Pair": f"{a} + {b}", "Times Teamed": n, "% of 18": round(100 * n / 18, 1)} for (a, b), n in counts.items()]
     return pd.DataFrame(rows).sort_values(by=["Times Teamed", "Pair"], ascending=[False, True])
 
 def make_podium_image(df: pd.DataFrame) -> bytes:
@@ -215,16 +211,16 @@ def make_podium_image(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO(); img.save(buf, format="PNG"); return buf.getvalue()
 
 def _font(size: int):
-    try:
-        return ImageFont.truetype("DejaVuSans.ttf", size)
-    except Exception:
-        return ImageFont.load_default()
+    try: return ImageFont.truetype("DejaVuSans.ttf", size)
+    except Exception: return ImageFont.load_default()
 
 # ------------------------------ UI COMPONENTS ---------------------------------
 def chip_with_editor(player: str, points: int, rank: int) -> None:
-    """Show rank (not points) on the chip; controls to edit points."""
+    """Show ordinal rank on chip; quick +/- & direct edit."""
     col_chip, col_plus, col_minus, col_num = st.columns([3, 1, 1, 1.3])
     with col_chip:
+        # Medal color only for 1..3; 4 has plain dark badge
+        cls = "gold" if rank == 1 else "silver" if rank == 2 else "bronze" if rank == 3 else "plain"
         st.markdown(
             f"<div class='player-chip'>🏁 <span class='player-name'>{player}</span> "
             f"<span class='rank-pill'>{rank}</span></div>",
@@ -239,38 +235,35 @@ def chip_with_editor(player: str, points: int, rank: int) -> None:
     with col_num:
         new_val = st.number_input(f"{player} pts", min_value=0, max_value=99,
                                   value=int(points), key=f"num_{player}", label_visibility="collapsed")
-        if new_val != points:
-            set_point(player, new_val)
+        if new_val != points: set_point(player, new_val)
 
 def team_block_editable(team_name: str, players: List[str], points: Dict[str, int], ranks: Dict[str, int]) -> None:
     st.markdown(f"#### {team_name}")
     with st.container(border=True):
-        for p in players:
-            chip_with_editor(p, points.get(p, 0), ranks.get(p, 0))
+        for p in players: chip_with_editor(p, points.get(p, 0), ranks.get(p, 0))
 
 def render_leaderboard(points: Dict[str, int], players: List[str]) -> None:
-    """Cards ordered by points with rank + points + streak."""
-    ranks = dense_rank(points)
+    """Dark, high-contrast; left medal shows 1..4 (gold/silver/bronze/plain)."""
+    ranks = ordinal_ranks(players, points)
     order = sorted(players, key=lambda p: (-points.get(p, 0), p))
     st.subheader("Leaderboard")
-    # Fancy cards
-    st.markdown("<div class='leaderboard'>", unsafe_allow_html=True)
-    for idx, p in enumerate(order, start=1):
-        cls = "lb-1" if idx == 1 else "lb-2" if idx == 2 else "lb-3" if idx == 3 else "lb-card"
-        base_cls = f"lb-card {cls}"
-        pts = points.get(p, 0)
-        streak = current_streak(p)
-        html = f"""
-<div class="{base_cls}">
-  <div class="title">{p}</div>
-  <div class="meta">
-    <span class="lb-rank">#{ranks[p]}</span>
-    <span>Points: <b>{pts}</b></span>
-    <span>Streak: <b>{streak}</b></span>
+    st.markdown("<div class='leaderboard-wrap'>", unsafe_allow_html=True)
+    for i, p in enumerate(order, start=1):
+        medal_cls = "gold" if i == 1 else "silver" if i == 2 else "bronze" if i == 3 else "plain"
+        pts = points.get(p, 0); streak = current_streak(p)
+        row_html = f"""
+<div class="lb-row">
+  <div class="lb-left"><div class="medal {medal_cls}">#{i}</div></div>
+  <div>
+    <div class="lb-name">{p}</div>
+    <div class="lb-meta">
+      <span>Points: <b>{pts}</b></span>
+      <span>Streak: <b>{streak}</b></span>
+      <span>Rank: <b>{ranks[p]}</b></span>
+    </div>
   </div>
-</div>
-"""
-        st.markdown(html, unsafe_allow_html=True)
+</div>"""
+        st.markdown(row_html, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------ APP (one page) --------------------------------
@@ -278,10 +271,9 @@ def main():
     st.set_page_config(page_title="Golf Round – One Page", page_icon="⛳", layout="wide")
     init_state()
     st.markdown(GOLF_CSS, unsafe_allow_html=True)
-
     rs: RoundState = st.session_state.rs
 
-    # Results block (auto after 18)
+    # Results auto on 18
     if rs.show_results:
         st.success("Round complete! 🎉 Final results below.")
         df_res = results_df()
@@ -293,8 +285,7 @@ def main():
   <div class="slot second"><div style="font-weight:800;">2nd</div><div style="font-weight:900;">{(top.iloc[1]['Player'] if len(top)>1 else '—')}</div><div class="small">Points: {(int(top.iloc[1]['Points']) if len(top)>1 else 0)}</div></div>
   <div class="slot first"><div style="font-weight:800;">1st</div><div style="font-weight:900;">{(top.iloc[0]['Player'] if len(top)>0 else '—')}</div><div class="small">Points: {(int(top.iloc[0]['Points']) if len(top)>0 else 0)}</div></div>
   <div class="slot third"><div style="font-weight:800;">3rd</div><div style="font-weight:900;">{(top.iloc[2]['Player'] if len(top)>2 else '—')}</div><div class="small">Points: {(int(top.iloc[2]['Points']) if len(top)>2 else 0)}</div></div>
-</div>
-""",
+</div>""",
             unsafe_allow_html=True,
         )
         png = make_podium_image(df_res)
@@ -302,12 +293,8 @@ def main():
         st.download_button("📄 Save Standings (CSV)", data=df_res.to_csv(index=False).encode("utf-8"),
                            file_name="golf_standings.csv", mime="text/csv")
         if rs.history:
-            st.download_button("📄 Save Hole Log (CSV)",
-                               data=pd.DataFrame(rs.history).to_csv(index=False).encode("utf-8"),
+            st.download_button("📄 Save Hole Log (CSV)", data=pd.DataFrame(rs.history).to_csv(index=False).encode("utf-8"),
                                file_name="golf_hole_log.csv", mime="text/csv")
-            st.download_button("📄 Save Combo Stats (CSV)",
-                               data=combo_stats().to_csv(index=False).encode("utf-8"),
-                               file_name="golf_combo_stats.csv", mime="text/csv")
 
     # Header
     st.markdown(f'<div class="golf-hero">{GOLF_SVG}'
@@ -315,7 +302,7 @@ def main():
                 f'<div class="small">Randomize every hole • Names lock after Hole 1 • End Round resets</div></div></div>',
                 unsafe_allow_html=True)
 
-    # Names disappear after first hole winner is recorded
+    # Names disappear after first hole recorded
     names_locked = (rs.hole_winners[0] is not None)
     with st.container(border=True):
         if not names_locked:
@@ -349,10 +336,8 @@ def main():
     if not rs.players:
         st.info("Enter 2 or 4 names above to begin.")
     else:
-        # Compute ranks once and pass to chips
-        ranks = dense_rank(rs.points)
+        ranks = ordinal_ranks(rs.players, rs.points)
 
-        # Teams + inline point editors (chips show rank)
         colA, colB = st.columns(2)
         with colA: team_block_editable("Team A", rs.teams["Team A"], rs.points, ranks)
         with colB: team_block_editable("Team B", rs.teams["Team B"], rs.points, ranks)
@@ -370,7 +355,7 @@ def main():
         with m:
             st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
 
-        # Leaderboard (ordered by points) with streaks
+        # Leaderboard (dark, readable, fun font) — numbers on left are 1–4
         render_leaderboard(rs.points, rs.players)
 
         # Hole log
@@ -381,17 +366,10 @@ def main():
         else:
             st.info("No holes recorded yet.")
 
-        # Teammate combo stats
-        st.subheader("Teammate Combo Stats (out of 18)")
-        st.dataframe(combo_stats(), use_container_width=True, hide_index=True)
-
-    # --- End Round (red) ------------------------------------------------------
+    # End Round
     st.markdown("---")
     if st.button("🛑 End Round", type="primary", use_container_width=True, help="Reset everything and start fresh"):
-        st.session_state.pop("rs", None)
-        init_state()
-        st.success("Round reset. Enter player names to begin.")
-        st.rerun()
+        st.session_state.pop("rs", None); init_state(); st.success("Round reset. Enter player names to begin."); st.rerun()
 
 if __name__ == "__main__":
     main()
