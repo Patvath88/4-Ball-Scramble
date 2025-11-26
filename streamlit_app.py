@@ -71,19 +71,12 @@ section.main{background:radial-gradient(1200px 620px at 15% -20%, #ffffff, #eaf7
 .badges{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-right:10px}
 .badge{background:#0a0f1a;border:1px solid #2a3546;border-radius:999px;padding:6px 12px;font-weight:800;color:#dfe7f4}
 
-/* FX (ball only; no audio) */
-.fx-area{position:relative;height:70px;overflow:hidden;margin:.2rem 0 .6rem 0}
-.fx-ball{position:absolute;left:-60px;top:36px;width:16px;height:16px;border-radius:50%;background:radial-gradient(circle at 40% 35%, #fff, #dcdcdc);box-shadow:0 2px 0 #bcbcbc;animation:drive .9s ease-out forwards, spin .9s linear}
-.fx-shadow{position:absolute;left:-60px;top:53px;width:20px;height:6px;border-radius:50%;background:rgba(0,0,0,.25);filter:blur(2px);animation:shadowDrive .9s ease-out forwards}
-@keyframes drive{0%{transform:translate(0,0)} 30%{transform:translate(220px,-32px)} 70%{transform:translate(700px,-6px)} 100%{transform:translate(1100px,6px)}}
-@keyframes shadowDrive{0%{transform:translate(0,0) scale(.6)} 30%{transform:translate(220px,6px) scale(1)} 100%{transform:translate(1100px,8px) scale(.8)}}
-@keyframes spin{0%{transform:rotate(0)} 100%{transform:rotate(420deg)}}
-
-/* Confirm overlay */
-.confirm-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);backdrop-filter:blur(2px);z-index:9998}
-.confirm-card{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:9999;background:#111827;color:#fff;border:2px solid #374151;border-radius:14px;padding:16px 18px;min-width:320px;box-shadow:0 18px 60px rgba(0,0,0,.5)}
-.confirm-title{font-weight:900;font-size:1.1rem;margin-bottom:.4rem}
-.confirm-text{color:#e5e7eb}
+/* Confirm (blocking pane) */
+.confirm-wrap{max-width:560px;margin:16vh auto 0 auto;}
+.confirm-pane{background:#111827;border:2px solid #374151;border-radius:16px;padding:18px 18px 14px 18px;
+  box-shadow:0 18px 60px rgba(0,0,0,.5); color:#fff}
+.confirm-title{font-weight:900;font-size:1.25rem;margin-bottom:.4rem}
+.confirm-text{color:#e5e7eb;margin-bottom:.8rem}
 </style>
 """
 
@@ -180,11 +173,8 @@ def ordinal(n: int) -> str:
     return f"{n}{'th' if 10<=n%100<=20 else {1:'st',2:'nd',3:'rd'}.get(n%10,'th')}"
 
 def compute_ties(players: List[str], points: Dict[str, int]) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, int]]:
-    """Return (place_label, tie_note, numeric_rank)."""
     ordered = sorted(((p, points.get(p, 0)) for p in players), key=lambda kv: (-kv[1], kv[0]))
-    labels: Dict[str, str] = {}
-    notes: Dict[str, str] = {}
-    ranks: Dict[str, int] = {}
+    labels: Dict[str, str] = {}; notes: Dict[str, str] = {}; ranks: Dict[str, int] = {}
     i = 0; rank = 0
     while i < len(ordered):
         j = i + 1
@@ -194,8 +184,7 @@ def compute_ties(players: List[str], points: Dict[str, int]) -> Tuple[Dict[str, 
         rank += 1
         if len(group) > 1:
             for p in group:
-                labels[p] = f"T-{rank}"
-                ranks[p] = rank
+                labels[p] = f"T-{rank}"; ranks[p] = rank
                 others = [x for x in group if x != p]
                 notes[p] = f"tied with {', '.join(others)} for {ordinal(rank)}"
         else:
@@ -292,168 +281,4 @@ def team_block_static(team_name: str, players: List[str], points: Dict[str, int]
     st.markdown(f"#### {team_name}")
     with st.container(border=True):
         for p in players:
-            chip_static(p, points.get(p, 0), labels.get(p, "—"), notes.get(p, ""), p in active_plus1)
-
-def _medal_class(rank: int) -> str:
-    if rank == 1: return "gold"
-    if rank == 2: return "silver"
-    if rank == 3: return "bronze"
-    return ""
-
-def render_leaderboard_masters(players: List[str], points: Dict[str, int],
-                               labels: Dict[str, str], notes: Dict[str, str], ranks: Dict[str, int],
-                               active_plus1: set) -> None:
-    ordered = sorted(((p, points.get(p, 0)) for p in players), key=lambda kv: (-kv[1], kv[0]))
-    st.markdown("<div class='masters-wrap'>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='mast-head'><div class='mast-title'>LEADERBOARD</div>"
-        "<div class='mast-pill'>Augusta Style</div></div>",
-        unsafe_allow_html=True,
-    )
-    for p, pts in ordered:
-        lab = labels.get(p, "—")
-        note = notes.get(p, "")
-        rank = ranks.get(p, 99)
-        medal = _medal_class(rank)
-        tied_html = f"<span class='tie-note'>{note}</span>" if note else ""
-        plus1_html = "<span class='lb-plus1'>+1</span>" if p in active_plus1 else ""
-        st.markdown(
-            f"""
-<div class="mrow">
-  <div class="mcell">
-     <div class="rank-medal {medal}">#{rank}</div>
-  </div>
-  <div class="mcell">
-     <div class="player-box">
-        <span class="pname">{p}</span> {tied_html} {plus1_html}
-     </div>
-  </div>
-  <div class="mcell">
-     <div class="badges">
-        <span class="badge">Current Place: <b>{lab}</b></span>
-        <span class="badge">Total Points: <b>{pts}</b></span>
-     </div>
-  </div>
-</div>
-""",
-            unsafe_allow_html=True,
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# ------------------------------ APP -------------------------------------------
-def main():
-    st.set_page_config(page_title="Golf Random Teams", page_icon="⛳", layout="wide")
-    init_state()
-    st.markdown(GOLF_CSS, unsafe_allow_html=True)
-    rs: RoundState = st.session_state.rs
-
-    if rs.toast:
-        st.toast(rs.toast); rs.toast = None
-
-    render_fx()
-
-    if rs.show_results:
-        st.success("Round complete! 🎉 Final results below.")
-        df_res = results_df()
-        st.dataframe(df_res, use_container_width=True, hide_index=True)
-        png = make_podium_image(df_res)
-        st.download_button("🖼️ Save Results Poster (PNG)", data=png, file_name="golf_results.png", mime="image/png")
-        st.download_button("📄 Save Standings (CSV)", data=df_res.to_csv(index=False).encode("utf-8"),
-                           file_name="golf_standings.csv", mime="text/csv")
-        if rs.history:
-            st.download_button("📄 Save Hole Log (CSV)",
-                               data=pd.DataFrame(rs.history).to_csv(index=False).encode("utf-8"),
-                               file_name="golf_hole_log.csv", mime="text/csv")
-
-    st.markdown(f'<div class="golf-hero">{GOLF_SVG}'
-                f'<div><div class="golf-badge">Random Teams • Score • Masters-style Leaderboard</div>'
-                f'<div style="opacity:.9">+1 to each winner • Auto-randomize after each hole • Undo & Confirm Reset</div></div></div>',
-                unsafe_allow_html=True)
-
-    names_locked = (rs.hole_winners[0] is not None)
-    with st.container(border=True):
-        if not names_locked:
-            c1, c2, c3, c4 = st.columns(4)
-            inputs = [
-                c1.text_input("Player 1", value=(rs.players[0] if len(rs.players) > 0 else "")),
-                c2.text_input("Player 2", value=(rs.players[1] if len(rs.players) > 1 else "")),
-                c3.text_input("Player 3 (optional)", value=(rs.players[2] if len(rs.players) > 2 else "")),
-                c4.text_input("Player 4 (optional)", value=(rs.players[3] if len(rs.players) > 3 else "")),
-            ]
-            b1, b2 = st.columns([1, 1])
-            with b1:
-                if st.button("✅ Set / Update Players", use_container_width=True):
-                    try:
-                        players = sanitize_players(inputs)
-                    except ValueError as e:
-                        st.error(str(e))
-                    else:
-                        set_players(players); st.success("Players updated.")
-            with b2:
-                if st.button("🎲 Randomize Teams now", use_container_width=True, disabled=not rs.players):
-                    rs.teams = random_pair(rs.players); rs.fx_armed = True; st.rerun()
-        else:
-            roster = " • ".join(rs.players) if rs.players else "—"
-            st.markdown("**Players are locked for this round (after Hole 1). Use _End Round_ to change.**")
-            st.markdown(f"Current players: **{roster}**")
-
-    if not rs.players:
-        st.info("Enter 2 or 4 names above to begin.")
-        return
-
-    labels, notes, ranks = compute_ties(rs.players, rs.points)
-    active_plus1 = set(rs.plus1_players) if time.time() < rs.plus1_until else set()
-    if rs.plus1_players and time.time() >= rs.plus1_until:
-        rs.plus1_players = []
-
-    colA, colB = st.columns(2)
-    with colA: team_block_static("Team A", rs.teams["Team A"], rs.points, labels, notes, active_plus1)
-    with colB: team_block_static("Team B", rs.teams["Team B"], rs.points, labels, notes, active_plus1)
-
-    st.divider()
-    st.subheader(f"Hole {rs.current_hole} / 18 • Record Winner (auto-randomizes next)")
-    disabled = rs.hole_winners[rs.current_hole-1] is not None if 1 <= rs.current_hole <= 18 else True
-    wA, wB, actions = st.columns([1, 1, 2])
-    with wA:
-        if st.button("🏆 Team A won", use_container_width=True, disabled=disabled or rs.show_results):
-            record_winner("Team A"); rs.fx_armed = True; st.rerun()
-    with wB:
-        if st.button("🏆 Team B won", use_container_width=True, disabled=disabled or rs.show_results):
-            record_winner("Team B"); rs.fx_armed = True; st.rerun()
-    with actions:
-        if st.button("↩️ Undo Last Hole", use_container_width=True, disabled=not rs.history):
-            undo_last_hole(); rs.fx_armed = True; st.rerun()
-        st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
-
-    # Masters-styled leaderboard
-    render_leaderboard_masters(rs.players, rs.points, labels, notes, ranks, active_plus1)
-
-    st.subheader("Hole Log")
-    if rs.history:
-        log_df = pd.DataFrame(rs.history)[["hole", "Team A", "Team B", "Winner"]].rename(columns={"hole": "Hole"})
-        st.dataframe(log_df, use_container_width=True, hide_index=True)
-    else:
-        st.info("No holes recorded yet.")
-
-    st.markdown("---")
-    if st.button("🛑 End Round", type="primary", use_container_width=True):
-        rs.show_end_confirm = True; st.rerun()
-
-    if rs.show_end_confirm:
-        st.markdown("<div class='confirm-mask'></div>", unsafe_allow_html=True)
-        st.markdown(
-            "<div class='confirm-card'>"
-            "<div class='confirm-title'>End Round?</div>"
-            "<div class='confirm-text'>This will <b>delete all holes, teams, and points</b> for this round.</div>"
-            "</div>", unsafe_allow_html=True,
-        )
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            if st.button("No, keep playing", key="cancel_end"):
-                rs.show_end_confirm = False; st.rerun()
-        with c2:
-            if st.button("🛑 End Round", key="confirm_end", type="primary"):
-                st.session_state.pop("rs", None); init_state(); st.success("Round reset. Enter player names to begin."); st.rerun()
-
-if __name__ == "__main__":
-    main()
+            chip_static(p, points.get(p, 0), labels.get
