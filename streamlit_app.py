@@ -31,7 +31,7 @@ section.main { background: radial-gradient(1200px 600px at 10% -10%, #ffffff, #e
 .player-name{font-weight:900;font-size:1.05rem;color:#0c0c0c !important}
 .player-meta{font-weight:800; color:#0b7a24; background:#eaf7e7; border:1px solid #bde0c2; border-radius:999px; padding:4px 10px}
 
-/* --- DARK LEADERBOARD (no streaks) --- */
+/* --- DARK LEADERBOARD --- */
 .leaderboard-wrap{margin-top:.2rem}
 .lb-row{border-radius:18px;padding:14px 16px;background:#0f1420;border:2px solid #1f2630;
        box-shadow:0 6px 22px rgba(0,0,0,.25); color:#eef2f7; margin-bottom:10px}
@@ -161,9 +161,30 @@ def results_df() -> pd.DataFrame:
     df = pd.DataFrame([{"Player": p, "Points": rs.points.get(p, 0)} for p in rs.players])
     return df.sort_values(by=["Points", "Player"], ascending=[False, True]).reset_index(drop=True)
 
-def ordinal_ranks_from_points(points: Dict[str, int]) -> Dict[str, int]:
-    ordered = [p for p, _ in sorted(points.items(), key=lambda kv: (-kv[1], kv[0]))]
-    return {p: i + 1 for i, p in enumerate(ordered)}
+def tied_rank_labels(points: Dict[str, int]) -> Tuple[Dict[str, str], Dict[str, int]]:
+    """
+    Dense ranks with ties and user-friendly labels.
+    Returns (labels, numeric_ranks) where:
+      labels[p] -> "T-1" if tied, else "1"
+      numeric_ranks[p] -> 1,2,3...
+    """
+    # group players by points
+    pts_to_players: Dict[int, List[str]] = {}
+    for p, pts in points.items():
+        pts_to_players.setdefault(pts, []).append(p)
+    # sort points high->low
+    unique_pts = sorted(pts_to_players.keys(), reverse=True)
+    labels: Dict[str, str] = {}
+    ranks: Dict[str, int] = {}
+    rank = 0
+    for pts in unique_pts:
+        rank += 1
+        group = sorted(pts_to_players[pts])
+        tied = len(group) > 1
+        for p in group:
+            labels[p] = f"T-{rank}" if tied else str(rank)
+            ranks[p] = rank
+    return labels, ranks
 
 def combo_stats() -> pd.DataFrame:
     rs: RoundState = st.session_state.rs
@@ -179,50 +200,33 @@ def combo_stats() -> pd.DataFrame:
 
 # ------------------------------ FUN FX (audio + animation) --------------------
 def _make_driver_wap_wav_bytes(duration_s: float = 0.28, sr: int = 44100) -> bytes:
-    """
-    'WAP' driver strike:
-    - very fast attack
-    - bright crack (2.2kHz -> 1.2kHz sweep), short decay
-    - low thump (120Hz + a touch of 60Hz), longer decay
-    - airy noise burst tail
-    """
+    """Synthetic 'driver WAP': crack + thump + airy burst."""
     n = int(duration_s * sr)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(sr)
-        lp = 0.0  # simple 1-pole lowpass for shaping noise
+        lp = 0.0
         for i in range(n):
             t = i / sr
-            # Envelopes
             attack = min(1.0, t / 0.003)
             env_crack = math.exp(-t / 0.025)
             env_thump = math.exp(-t / 0.12)
             env_noise = math.exp(-t / 0.09)
-
-            # Bright crack with slight down-sweep
             f = 2200.0 - 1000.0 * t
             crack = math.sin(2 * math.pi * f * t) * env_crack
-
-            # Low thump (clubhead mass)
-            thump = (0.75 * math.sin(2 * math.pi * 120 * t) +
-                     0.25 * math.sin(2 * math.pi * 60 * t)) * env_thump
-
-            # Airy burst (high-passed noise)
+            thump = (0.75 * math.sin(2 * math.pi * 120 * t) + 0.25 * math.sin(2 * math.pi * 60 * t)) * env_thump
             raw = (random.random() * 2 - 1)
-            lp = lp + 0.2 * (raw - lp)                 # low-pass
-            hp = raw - lp                              # crude high-pass
+            lp = lp + 0.2 * (raw - lp)  # low-pass
+            hp = raw - lp               # high-pass
             whoosh = hp * env_noise
-
-            # Mix & soft limit
             sample = attack * (0.55 * crack + 0.6 * thump + 0.2 * whoosh)
-            sample = math.tanh(sample * 1.6)           # gentle saturation
+            sample = math.tanh(sample * 1.6)
             wf.writeframes(struct.pack("<h", int(max(-1, min(1, sample)) * 32767)))
     return buf.getvalue()
 
 _DRIVER_WAP_B64 = base64.b64encode(_make_driver_wap_wav_bytes()).decode("ascii")
 
 def render_fx():
-    """One-shot animation + driver 'WAP' sound; then disarm."""
     rs: RoundState = st.session_state.rs
     if not rs.fx_armed: return
     rs.fx_armed = False
@@ -268,13 +272,13 @@ def _font(size: int):
     except Exception: return ImageFont.load_default()
 
 # ------------------------------ UI COMPONENTS ---------------------------------
-def chip_with_editor(player: str, points: int, rank: int) -> None:
-    # Why: shows place & points inline; +/- and direct edit rerun to refresh leaderboard.
+def chip_with_editor(player: str, points: int, place_label: str) -> None:
+    """Why: keep placement & points visible where you click; rerun to refresh leaderboard."""
     col_chip, col_plus, col_minus, col_num = st.columns([3, 1, 1, 1.3])
     with col_chip:
         st.markdown(
             f"<div class='player-chip'>🏁 <span class='player-name'>{player}</span> "
-            f"<span class='player-meta'>Current Place: {rank}</span> "
+            f"<span class='player-meta'>Current Place: {place_label}</span> "
             f"<span class='player-meta'>Total Points: {points}</span></div>",
             unsafe_allow_html=True,
         )
@@ -290,22 +294,25 @@ def chip_with_editor(player: str, points: int, rank: int) -> None:
         if new_val != points:
             set_point(player, new_val); st.session_state.rs.fx_armed = True; st.rerun()
 
-def team_block_editable(team_name: str, players: List[str], points: Dict[str, int], ranks: Dict[str, int]) -> None:
+def team_block_editable(team_name: str, players: List[str], points: Dict[str, int], place_labels: Dict[str, str]) -> None:
     st.markdown(f"#### {team_name}")
     with st.container(border=True):
-        for p in players: chip_with_editor(p, points.get(p, 0), ranks.get(p, 0))
+        for p in players:
+            chip_with_editor(p, points.get(p, 0), place_labels.get(p, "—"))
 
-def render_leaderboard(points: Dict[str, int]) -> None:
+def render_leaderboard(points: Dict[str, int], place_labels: Dict[str, str]) -> None:
+    """Always order by current points (desc, then name) and show tie-aware label."""
     ordered = [(p, pts) for p, pts in sorted(points.items(), key=lambda kv: (-kv[1], kv[0]))]
     st.subheader("Leaderboard")
     st.markdown("<div class='leaderboard-wrap'>", unsafe_allow_html=True)
-    for place, (p, pts) in enumerate(ordered, start=1):
+    for _, (p, pts) in enumerate(ordered, start=1):
+        label = place_labels.get(p, "—")
         st.markdown(
             f"""
 <div class="lb-row">
   <div class="lb-name">{p}</div>
   <div class="lb-lines">
-    <span class="lb-tag">Current Place: <b>{place}</b></span>
+    <span class="lb-tag">Current Place: <b>{label}</b></span>
     <span class="lb-tag">Total Points: <b>{pts}</b></span>
   </div>
 </div>""",
@@ -321,7 +328,7 @@ def main():
 
     rs: RoundState = st.session_state.rs
 
-    # Play FX from previous interaction
+    # FX from previous interaction
     render_fx()
 
     # Results (auto at 18)
@@ -379,11 +386,12 @@ def main():
     if not rs.players:
         st.info("Enter 2 or 4 names above to begin.")
     else:
-        ranks = ordinal_ranks_from_points(rs.points)
+        # Tie-aware placements computed from current points
+        place_labels, _ranks_num = tied_rank_labels(rs.points)
 
         colA, colB = st.columns(2)
-        with colA: team_block_editable("Team A", rs.teams["Team A"], rs.points, ranks)
-        with colB: team_block_editable("Team B", rs.teams["Team B"], rs.points, ranks)
+        with colA: team_block_editable("Team A", rs.teams["Team A"], rs.points, place_labels)
+        with colB: team_block_editable("Team B", rs.teams["Team B"], rs.points, place_labels)
 
         st.divider()
         st.subheader(f"Hole {rs.current_hole} / 18 • Record Winner (auto-randomizes next)")
@@ -398,8 +406,10 @@ def main():
         with m:
             st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
 
-        render_leaderboard(rs.points)
+        # Leaderboard — tie-aware labels, sorted by points desc then name
+        render_leaderboard(rs.points, place_labels)
 
+        # Hole log
         st.subheader("Hole Log")
         if rs.history:
             log_df = pd.DataFrame(rs.history)[["hole", "Team A", "Team B", "Winner"]].rename(columns={"hole": "Hole"})
