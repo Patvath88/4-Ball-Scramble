@@ -1,12 +1,8 @@
 # file: streamlit_app.py
-import base64
 import io
 import math
-import os
 import random
-import struct
 import time
-import wave
 from dataclasses import dataclass
 from itertools import combinations
 from typing import Dict, List, Optional, Tuple
@@ -44,7 +40,7 @@ section.main { background: radial-gradient(1200px 600px at 10% -10%, #ffffff, #e
 div.stButton > button[kind="primary"]{ background:#c0392b;border-color:#8e2a1b;color:#fff; }
 div.stButton > button[kind="primary"]:hover{ background:#a33224; }
 
-/* FX */
+/* FX (animation only; no audio) */
 .fx-area{position:relative;height:80px;overflow:hidden;margin:.2rem 0 .6rem 0}
 .fx-ball{position:absolute;left:-60px;top:40px;width:18px;height:18px;border-radius:50%;background:radial-gradient(circle at 40% 35%, #fff, #dcdcdc);box-shadow:0 2px 0 #bcbcbc;animation:drive .9s ease-out forwards, spin .9s linear}
 .fx-shadow{position:absolute;left:-60px;top:59px;width:22px;height:6px;border-radius:50%;background:rgba(0,0,0,.25);filter:blur(2px);animation:shadowDrive .9s ease-out forwards}
@@ -85,9 +81,7 @@ class RoundState:
     fx_armed: bool
     fx_tick: int
     show_end_confirm: bool
-    audio_b64: Optional[str]
-    audio_mime: Optional[str]
-    use_uploaded_audio: bool
+    toast: Optional[str]
 
 def init_state() -> None:
     if "rs" not in st.session_state:
@@ -103,9 +97,7 @@ def init_state() -> None:
             fx_armed=False,
             fx_tick=0,
             show_end_confirm=False,
-            audio_b64=None,
-            audio_mime=None,
-            use_uploaded_audio=True,
+            toast=None,
         )
     upgrade_state()
 
@@ -123,9 +115,7 @@ def upgrade_state() -> None:
     if not hasattr(rs, "fx_armed"): rs.fx_armed = False
     if not hasattr(rs, "fx_tick"): rs.fx_tick = 0
     if not hasattr(rs, "show_end_confirm"): rs.show_end_confirm = False
-    if not hasattr(rs, "audio_b64"): rs.audio_b64 = None
-    if not hasattr(rs, "audio_mime"): rs.audio_mime = None
-    if not hasattr(rs, "use_uploaded_audio"): rs.use_uploaded_audio = True
+    if not hasattr(rs, "toast"): rs.toast = None
 
 # ------------------------------ HELPERS ---------------------------------------
 def sanitize_players(inputs: List[str]) -> List[str]:
@@ -151,17 +141,17 @@ def set_players(players: List[str]) -> None:
         rs.teams = random_pair(players)
 
 def record_winner(team_name: str) -> None:
-    """+1 to each winner; never resets totals here."""
+    """+1 to each winner; set toast; advance; re-roll; results at 18."""
     rs: RoundState = st.session_state.rs
     idx = rs.current_hole - 1
     if idx < 0 or idx > 17 or rs.hole_winners[idx] is not None:
         return
-    winners = rs.teams.get(team_name, [])
+    winners = [p for p in rs.teams.get(team_name, []) if p in rs.players]
     for p in winners:
-        if p in rs.players:
-            rs.points[p] = rs.points.get(p, 0) + 1
+        rs.points[p] = rs.points.get(p, 0) + 1
     rs.hole_winners[idx] = team_name
     rs.history.append({"hole": rs.current_hole, "Team A": rs.teams["Team A"][:], "Team B": rs.teams["Team B"][:], "Winner": team_name})
+    rs.toast = f"🏆 Hole {rs.current_hole}: {team_name} – +1 to " + ", ".join(winners) if winners else f"🏆 Hole {rs.current_hole}: {team_name}"
     if rs.current_hole == 18:
         rs.show_results = True
     else:
@@ -169,29 +159,23 @@ def record_winner(team_name: str) -> None:
         rs.teams = random_pair(rs.players)
 
 def undo_last_hole() -> None:
+    """Reverse the most recent recorded hole (points, winner, teams, hole)."""
     rs: RoundState = st.session_state.rs
     if not rs.history:
         return
     last = rs.history.pop()
-    hole = last["hole"]
-    winner_team = last["Winner"]
+    hole = last["hole"]; winner_team = last["Winner"]
+    losers = []
     for p in last[winner_team]:
         if p in rs.players:
-            rs.points[p] = max(0, rs.points.get(p, 0) - 1)
+            before = rs.points.get(p, 0)
+            rs.points[p] = max(0, before - 1)
+            losers.append(p)
     rs.hole_winners[hole - 1] = None
     rs.current_hole = hole
     rs.teams = {"Team A": last["Team A"], "Team B": last["Team B"]}
     rs.show_results = False
-
-def adjust_point(player: str, delta: int) -> None:
-    rs: RoundState = st.session_state.rs
-    if player in rs.players:
-        rs.points[player] = max(0, rs.points.get(player, 0) + delta)
-
-def set_point(player: str, value: int) -> None:
-    rs: RoundState = st.session_state.rs
-    if player in rs.players:
-        rs.points[player] = max(0, int(value))
+    rs.toast = f"↩️ Undid hole {hole}: removed 1 from " + ", ".join(losers) if losers else f"↩️ Undid hole {hole}"
 
 def results_df() -> pd.DataFrame:
     rs: RoundState = st.session_state.rs
@@ -199,94 +183,33 @@ def results_df() -> pd.DataFrame:
     return df.sort_values(by=["Points", "Player"], ascending=[False, True]).reset_index(drop=True)
 
 def standings(players: List[str], points: Dict[str, int]) -> List[Tuple[str, int]]:
-    """Why: ensure leaderboard uses only current players and orders by points desc then name."""
     return sorted(((p, points.get(p, 0)) for p in players), key=lambda kv: (-kv[1], kv[0]))
 
 def tied_labels(players: List[str], points: Dict[str, int]) -> Dict[str, str]:
-    """Dense ranks with ties -> 'T-#' else '#'; uses only current players."""
     ordered = standings(players, points)
     labels: Dict[str, str] = {}
-    rank = 0
-    i = 0
+    rank = 0; i = 0
     while i < len(ordered):
-        same = [ordered[i]]
-        j = i + 1
+        same = [ordered[i]]; j = i + 1
         while j < len(ordered) and ordered[j][1] == ordered[i][1]:
             same.append(ordered[j]); j += 1
         rank += 1
         tag = f"T-{rank}" if len(same) > 1 else str(rank)
-        for p, _ in same:
-            labels[p] = tag
+        for p, _ in same: labels[p] = tag
         i = j
     return labels
 
-def combo_stats() -> pd.DataFrame:
-    rs: RoundState = st.session_state.rs
-    if len(rs.players) < 2: return pd.DataFrame(columns=["Pair", "Times Teamed", "% of 18"])
-    counts: Dict[Tuple[str, str], int] = {tuple(sorted(pair)): 0 for pair in combinations(rs.players, 2)}
-    for entry in rs.history:
-        for team in ("Team A", "Team B"):
-            for a, b in combinations(sorted([x for x in entry[team] if x in rs.players]), 2):
-                counts[(a, b)] += 1
-    rows = [{"Pair": f"{a} + {b}", "Times Teamed": n, "% of 18": round(100 * n / 18, 1)} for (a, b), n in counts.items()]
-    return pd.DataFrame(rows).sort_values(by=["Times Teamed", "Pair"], ascending=[False, True])
-
-# ------------------------------ AUDIO FX --------------------------------------
-def _make_driver_wap_wav_bytes(duration_s: float = 0.28, sr: int = 44100) -> bytes:
-    n = int(duration_s * sr)
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(sr)
-        lp = 0.0
-        for i in range(n):
-            t = i / sr
-            attack = min(1.0, t / 0.003)
-            env_crack = math.exp(-t / 0.025)
-            env_thump = math.exp(-t / 0.12)
-            env_noise = math.exp(-t / 0.09)
-            f = 2200.0 - 1000.0 * t
-            crack = math.sin(2 * math.pi * f * t) * env_crack
-            thump = (0.75 * math.sin(2 * math.pi * 120 * t) + 0.25 * math.sin(2 * math.pi * 60 * t)) * env_thump
-            raw = (random.random() * 2 - 1)
-            lp = lp + 0.2 * (raw - lp)
-            hp = raw - lp
-            whoosh = hp * env_noise
-            sample = math.tanh(1.6 * (attack * (0.55 * crack + 0.6 * thump + 0.2 * whoosh)))
-            wf.writeframes(struct.pack("<h", int(max(-1, min(1, sample)) * 32767)))
-    return buf.getvalue()
-
-_BUILTIN_WAP_B64 = base64.b64encode(_make_driver_wap_wav_bytes()).decode("ascii")
-
-def _guess_mime(name: str) -> str:
-    ext = os.path.splitext(name or "")[1].lower()
-    if ext in (".wav",): return "audio/wav"
-    if ext in (".mp3",): return "audio/mpeg"
-    if ext in (".ogg", ".oga"): return "audio/ogg"
-    return "audio/mpeg"
-
-def set_uploaded_audio(file) -> None:
-    rs: RoundState = st.session_state.rs
-    content = file.read()
-    rs.audio_b64 = base64.b64encode(content).decode("ascii")
-    rs.audio_mime = _guess_mime(file.name)
-    rs.use_uploaded_audio = True
-
+# ------------------------------ FX (animation only) ---------------------------
 def render_fx():
     rs: RoundState = st.session_state.rs
     if not rs.fx_armed: return
     rs.fx_armed = False
     rs.fx_tick += 1
-    use_uploaded = bool(rs.use_uploaded_audio and rs.audio_b64 and rs.audio_mime)
-    b64 = rs.audio_b64 if use_uploaded else _BUILTIN_WAP_B64
-    mime = rs.audio_mime if use_uploaded else "audio/wav"
     st.markdown(f"""
 <div class="fx-area" id="fx{rs.fx_tick}">
   <div class="fx-ball"></div>
   <div class="fx-shadow"></div>
 </div>
-<audio autoplay style="display:none">
-  <source src="data:{mime};base64,{b64}" type="{mime}">
-</audio>
 """, unsafe_allow_html=True)
 
 # ------------------------------ IMAGE (poster) --------------------------------
@@ -320,33 +243,21 @@ def _font(size: int):
     except Exception: return ImageFont.load_default()
 
 # ------------------------------ UI PARTS --------------------------------------
-def chip_with_editor(player: str, points: int, place_label: str, tied: bool) -> None:
-    col_chip, col_plus, col_minus, col_num = st.columns([3, 1, 1, 1.3])
-    with col_chip:
-        tied_html = f"<span class='tie-badge'>(tied)</span>" if tied else ""
-        st.markdown(
-            f"<div class='player-chip'>🏁 <span class='player-name'>{player}</span> {tied_html} "
-            f"<span class='player-meta'>Current Place: {place_label}</span> "
-            f"<span class='player-meta'>Total Points: {points}</span></div>",
-            unsafe_allow_html=True,
-        )
-    with col_plus:
-        if st.button("➕", key=f"inc_{player}", use_container_width=True):
-            adjust_point(player, +1); st.session_state.rs.fx_armed = True; st.rerun()
-    with col_minus:
-        if st.button("➖", key=f"dec_{player}", use_container_width=True):
-            adjust_point(player, -1); st.session_state.rs.fx_armed = True; st.rerun()
-    with col_num:
-        new_val = st.number_input(f"{player} pts", min_value=0, max_value=99, value=int(points),
-                                  key=f"num_{player}", label_visibility="collapsed")
-        if new_val != points:
-            set_point(player, new_val); st.session_state.rs.fx_armed = True; st.rerun()
+def chip_static(player: str, points: int, place_label: str, tied: bool) -> None:
+    # Why: no manual editing; totals only change via wins/undo.
+    tied_html = f"<span class='tie-badge'>(tied)</span>" if tied else ""
+    st.markdown(
+        f"<div class='player-chip'>🏁 <span class='player-name'>{player}</span> {tied_html} "
+        f"<span class='player-meta'>Current Place: {place_label}</span> "
+        f"<span class='player-meta'>Total Points: {points}</span></div>",
+        unsafe_allow_html=True,
+    )
 
-def team_block_editable(team_name: str, players: List[str], points: Dict[str, int], labels: Dict[str, str]) -> None:
+def team_block_static(team_name: str, players: List[str], points: Dict[str, int], labels: Dict[str, str]) -> None:
     st.markdown(f"#### {team_name}")
     with st.container(border=True):
         for p in players:
-            chip_with_editor(p, points.get(p, 0), labels.get(p, "—"), labels.get(p, "").startswith("T-"))
+            chip_static(p, points.get(p, 0), labels.get(p, "—"), labels.get(p, "").startswith("T-"))
 
 def render_leaderboard(players: List[str], points: Dict[str, int], labels: Dict[str, str]) -> None:
     ordered = standings(players, points)
@@ -375,20 +286,27 @@ def main():
     st.markdown(GOLF_CSS, unsafe_allow_html=True)
     rs: RoundState = st.session_state.rs
 
-    # Sidebar: audio upload/toggle
-    with st.sidebar:
-        st.header("🎧 Sound FX")
-        f = st.file_uploader("Upload Tiger driver impact (WAV / MP3 / OGG)", type=["wav", "mp3", "ogg"])
-        if f is not None:
-            set_uploaded_audio(f); st.success("Loaded custom impact sound.")
-        if rs.audio_b64:
-            rs.use_uploaded_audio = st.checkbox("Use uploaded sound", value=rs.use_uploaded_audio)
-            st.caption("Disable to use the built-in 'driver WAP' instead.")
-        else:
-            st.caption("No custom audio uploaded. Using built-in 'driver WAP'.")
+    # Toasts queued from last action
+    if rs.toast:
+        st.toast(rs.toast)
+        rs.toast = None
 
-    # Play pending FX
+    # Play animation if armed (no audio)
     render_fx()
+
+    # Results on 18
+    if rs.show_results:
+        st.success("Round complete! 🎉 Final results below.")
+        df_res = results_df()
+        st.dataframe(df_res, use_container_width=True, hide_index=True)
+        png = make_podium_image(df_res)
+        st.download_button("🖼️ Save Results Poster (PNG)", data=png, file_name="golf_results.png", mime="image/png")
+        st.download_button("📄 Save Standings (CSV)", data=df_res.to_csv(index=False).encode("utf-8"),
+                           file_name="golf_standings.csv", mime="text/csv")
+        if rs.history:
+            st.download_button("📄 Save Hole Log (CSV)",
+                               data=pd.DataFrame(rs.history).to_csv(index=False).encode("utf-8"),
+                               file_name="golf_hole_log.csv", mime="text/csv")
 
     # Header
     st.markdown(f'<div class="golf-hero">{GOLF_SVG}'
@@ -431,10 +349,10 @@ def main():
     # Tie-aware labels from current players & points
     labels = tied_labels(rs.players, rs.points)
 
-    # Teams + inline editors
+    # Teams (no point editing)
     colA, colB = st.columns(2)
-    with colA: team_block_editable("Team A", rs.teams["Team A"], rs.points, labels)
-    with colB: team_block_editable("Team B", rs.teams["Team B"], rs.points, labels)
+    with colA: team_block_static("Team A", rs.teams["Team A"], rs.points, labels)
+    with colB: team_block_static("Team B", rs.teams["Team B"], rs.points, labels)
 
     st.divider()
     st.subheader(f"Hole {rs.current_hole} / 18 • Record Winner (auto-randomizes next)")
