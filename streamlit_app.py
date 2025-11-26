@@ -28,6 +28,11 @@ section.main { background: radial-gradient(1200px 600px at 10% -10%, #ffffff, #e
 .podium .second{height:160px;background:linear-gradient(180deg,#c0c0c0,#bdc3c7)}
 .podium .third{height:120px;background:linear-gradient(180deg,#cd7f32,#b16b28)}
 .small{color:#333;font-size:.92rem}
+/* Make primary buttons red; only End Round uses primary */
+div.stButton > button[kind="primary"]{
+  background:#c0392b;border-color:#8e2a1b;color:#fff;
+}
+div.stButton > button[kind="primary"]:hover{ background:#a33224; }
 @media (prefers-color-scheme: dark){
   .team-card,.player-chip{background:#fff}
   .player-name{color:#0d0d0d !important}
@@ -58,7 +63,6 @@ class RoundState:
     started_at: float
 
 def init_state() -> None:
-    """Create base state if missing."""
     if "rs" not in st.session_state:
         st.session_state.rs = RoundState(
             players=[],
@@ -70,30 +74,19 @@ def init_state() -> None:
             show_results=False,
             started_at=time.time(),
         )
-    upgrade_state()  # critical: migrate older sessions (fixes AttributeError)
+    upgrade_state()
 
 def upgrade_state() -> None:
-    """Backfill any missing attributes from older app versions."""
     rs = st.session_state.rs
-    # Why: old sessions won't have these fields -> crash without guard
-    if not hasattr(rs, "history"):
-        rs.history = []
-    if not hasattr(rs, "show_results"):
-        rs.show_results = False
-    if not hasattr(rs, "hole_winners") or rs.hole_winners is None:
-        rs.hole_winners = [None] * 18
-    if len(rs.hole_winners) != 18:
-        rs.hole_winners = (rs.hole_winners + [None] * 18)[:18]
-    if not hasattr(rs, "current_hole") or rs.current_hole < 1:
-        rs.current_hole = 1
-    if not hasattr(rs, "teams") or not isinstance(rs.teams, dict):
-        rs.teams = {"Team A": [], "Team B": []}
-    if not hasattr(rs, "points") or not isinstance(rs.points, dict):
-        rs.points = {}
-    if not hasattr(rs, "players"):
-        rs.players = []
-    if not hasattr(rs, "started_at"):
-        rs.started_at = time.time()
+    if not hasattr(rs, "history"): rs.history = []
+    if not hasattr(rs, "show_results"): rs.show_results = False
+    if not hasattr(rs, "hole_winners") or rs.hole_winners is None: rs.hole_winners = [None]*18
+    if len(rs.hole_winners) != 18: rs.hole_winners = (rs.hole_winners + [None]*18)[:18]
+    if not hasattr(rs, "current_hole") or rs.current_hole < 1: rs.current_hole = 1
+    if not hasattr(rs, "teams") or not isinstance(rs.teams, dict): rs.teams = {"Team A": [], "Team B": []}
+    if not hasattr(rs, "points") or not isinstance(rs.points, dict): rs.points = {}
+    if not hasattr(rs, "players"): rs.players = []
+    if not hasattr(rs, "started_at"): rs.started_at = time.time()
 
 # ------------------------------ HELPERS ---------------------------------------
 def sanitize_players(inputs: List[str]) -> List[str]:
@@ -112,20 +105,22 @@ def random_pair(players: List[str]) -> Dict[str, List[str]]:
     return {"Team A": sh[:split], "Team B": sh[split:]}
 
 def set_players(players: List[str]) -> None:
-    """Preserve existing points for same names; init new names to 0."""
     rs: RoundState = st.session_state.rs
     rs.players = players
     rs.points = {p: rs.points.get(p, 0) for p in players}
-    rs.teams = random_pair(players) if not any(rs.teams.values()) else rs.teams
+    if not any(rs.teams.values()):
+        rs.teams = random_pair(players)
 
 def record_winner(team_name: str) -> None:
-    """Record hole, award points, log, then auto-reroll for next hole."""
+    """Award, log, then auto-reroll for next hole; show results at 18."""
     rs: RoundState = st.session_state.rs
     idx = rs.current_hole - 1
     if idx < 0 or idx > 17 or rs.hole_winners[idx] is not None:
         return
+    # award
     for p in rs.teams.get(team_name, []):
         rs.points[p] = rs.points.get(p, 0) + 1
+    # log
     rs.hole_winners[idx] = team_name
     rs.history.append({
         "hole": rs.current_hole,
@@ -133,6 +128,7 @@ def record_winner(team_name: str) -> None:
         "Team B": rs.teams["Team B"][:],
         "Winner": team_name,
     })
+    # next
     if rs.current_hole == 18:
         rs.show_results = True
     else:
@@ -153,10 +149,10 @@ def results_df() -> pd.DataFrame:
     return df.sort_values(by=["Points", "Player"], ascending=[False, True]).reset_index(drop=True)
 
 def combo_stats() -> pd.DataFrame:
-    """Teammate combo counts across holes; % of 18 for readability."""
     rs: RoundState = st.session_state.rs
     if len(rs.players) < 2:
         return pd.DataFrame(columns=["Pair", "Times Teamed", "% of 18"])
+    from itertools import combinations
     counts: Dict[Tuple[str, str], int] = {tuple(sorted(pair)): 0 for pair in combinations(rs.players, 2)}
     for entry in rs.history:
         for team in ("Team A", "Team B"):
@@ -199,7 +195,6 @@ def _font(size: int):
 
 # ------------------------------ UI COMPONENTS ---------------------------------
 def chip_with_editor(player: str, points: int) -> None:
-    """Inline controls next to each name. Why: quick corrections."""
     col_chip, col_plus, col_minus, col_num = st.columns([3, 1, 1, 1.3])
     with col_chip:
         st.markdown(
@@ -233,7 +228,7 @@ def main():
 
     rs: RoundState = st.session_state.rs
 
-    # Results block (auto after 18)
+    # If 18th recorded, show results block at top
     if rs.show_results:
         st.success("Round complete! 🎉 Final results below.")
         df_res = results_df()
@@ -253,7 +248,6 @@ def main():
         st.download_button("🖼️ Save Results Poster (PNG)", data=png, file_name="golf_results.png", mime="image/png")
         st.download_button("📄 Save Standings (CSV)", data=df_res.to_csv(index=False).encode("utf-8"),
                            file_name="golf_standings.csv", mime="text/csv")
-        # Extra: export hole log & combo stats too
         if rs.history:
             st.download_button("📄 Save Hole Log (CSV)",
                                data=pd.DataFrame(rs.history).to_csv(index=False).encode("utf-8"),
@@ -265,67 +259,82 @@ def main():
     # Header
     st.markdown(f'<div class="golf-hero">{GOLF_SVG}'
                 f'<div><div class="golf-badge">Golf Round – Teams & Score</div>'
-                f'<div class="small">Randomize every hole • Edit points inline • Live history & combo stats</div></div></div>',
+                f'<div class="small">Randomize every hole • Names lock after Hole 1 • End Round resets</div></div></div>',
                 unsafe_allow_html=True)
 
-    # Player setup
+    # Names disappear after first hole winner is recorded
+    names_locked = (rs.hole_winners[0] is not None)
     with st.container(border=True):
-        c1, c2, c3, c4 = st.columns(4)
-        inputs = [
-            c1.text_input("Player 1", value=(rs.players[0] if len(rs.players) > 0 else "")),
-            c2.text_input("Player 2", value=(rs.players[1] if len(rs.players) > 1 else "")),
-            c3.text_input("Player 3 (optional)", value=(rs.players[2] if len(rs.players) > 2 else "")),
-            c4.text_input("Player 4 (optional)", value=(rs.players[3] if len(rs.players) > 3 else "")),
-        ]
-        b1, b2, b3 = st.columns([1, 1, 2])
-        with b1:
-            if st.button("✅ Set / Update Players", use_container_width=True):
-                try:
-                    players = sanitize_players(inputs)
-                except ValueError as e:
-                    st.error(str(e))
-                else:
-                    set_players(players)
-                    if not rs.history:
-                        rs.teams = random_pair(players)
-                    st.success("Players updated.")
-        with b2:
-            if st.button("🗑️ Reset Round", use_container_width=True):
-                st.session_state.pop("rs", None); init_state(); st.rerun()
+        if not names_locked:
+            c1, c2, c3, c4 = st.columns(4)
+            inputs = [
+                c1.text_input("Player 1", value=(rs.players[0] if len(rs.players) > 0 else "")),
+                c2.text_input("Player 2", value=(rs.players[1] if len(rs.players) > 1 else "")),
+                c3.text_input("Player 3 (optional)", value=(rs.players[2] if len(rs.players) > 2 else "")),
+                c4.text_input("Player 4 (optional)", value=(rs.players[3] if len(rs.players) > 3 else "")),
+            ]
+            b1, b2 = st.columns([1, 1])
+            with b1:
+                if st.button("✅ Set / Update Players", use_container_width=True):
+                    try:
+                        players = sanitize_players(inputs)
+                    except ValueError as e:
+                        st.error(str(e))
+                    else:
+                        set_players(players)
+                        if not rs.history:
+                            rs.teams = random_pair(players)
+                        st.success("Players updated.")
+            with b2:
+                if st.button("🎲 Randomize Teams now", use_container_width=True, disabled=not rs.players):
+                    rs.teams = random_pair(rs.players); st.rerun()
+        else:
+            # Show locked notice and roster
+            st.markdown("**Players are locked for this round (after Hole 1). Use _End Round_ to change.**")
+            roster = " • ".join(rs.players) if rs.players else "—"
+            st.markdown(f"Current players: **{roster}**")
 
     if not rs.players:
-        st.info("Enter 2 or 4 names, then **Set / Update Players**.")
-        return
-
-    # Teams + inline point editors
-    colA, colB = st.columns(2)
-    with colA: team_block_editable("Team A", rs.teams["Team A"], rs.points)
-    with colB: team_block_editable("Team B", rs.teams["Team B"], rs.points)
-
-    st.divider()
-    st.subheader(f"Hole {rs.current_hole} / 18 • Record Winner")
-    disabled = rs.hole_winners[rs.current_hole-1] is not None if 1 <= rs.current_hole <= 18 else True
-    wA, wB, m = st.columns([1, 1, 2])
-    with wA:
-        if st.button("🏆 Team A won", use_container_width=True, disabled=disabled or rs.show_results):
-            record_winner("Team A"); st.rerun()
-    with wB:
-        if st.button("🏆 Team B won", use_container_width=True, disabled=disabled or rs.show_results):
-            record_winner("Team B"); st.rerun()
-    with m:
-        st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
-
-    # Hole log
-    st.subheader("Hole Log")
-    if rs.history:
-        log_df = pd.DataFrame(rs.history)[["hole", "Team A", "Team B", "Winner"]].rename(columns={"hole": "Hole"})
-        st.dataframe(log_df, use_container_width=True, hide_index=True)
+        st.info("Enter 2 or 4 names above to begin.")
+        # Show End Round anyway
     else:
-        st.info("No holes recorded yet.")
+        # Teams + inline point editors
+        colA, colB = st.columns(2)
+        with colA: team_block_editable("Team A", rs.teams["Team A"], rs.points)
+        with colB: team_block_editable("Team B", rs.teams["Team B"], rs.points)
 
-    # Teammate combo stats
-    st.subheader("Teammate Combo Stats (out of 18)")
-    st.dataframe(combo_stats(), use_container_width=True, hide_index=True)
+        st.divider()
+        st.subheader(f"Hole {rs.current_hole} / 18 • Record Winner (auto-randomizes next)")
+        disabled = rs.hole_winners[rs.current_hole-1] is not None if 1 <= rs.current_hole <= 18 else True
+        wA, wB, m = st.columns([1, 1, 2])
+        with wA:
+            if st.button("🏆 Team A won", use_container_width=True, disabled=disabled or rs.show_results):
+                record_winner("Team A"); st.rerun()
+        with wB:
+            if st.button("🏆 Team B won", use_container_width=True, disabled=disabled or rs.show_results):
+                record_winner("Team B"); st.rerun()
+        with m:
+            st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
+
+        # Hole log
+        st.subheader("Hole Log")
+        if rs.history:
+            log_df = pd.DataFrame(rs.history)[["hole", "Team A", "Team B", "Winner"]].rename(columns={"hole": "Hole"})
+            st.dataframe(log_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No holes recorded yet.")
+
+        # Teammate combo stats
+        st.subheader("Teammate Combo Stats (out of 18)")
+        st.dataframe(combo_stats(), use_container_width=True, hide_index=True)
+
+    # --- End Round (red) ------------------------------------------------------
+    st.markdown("---")
+    if st.button("🛑 End Round", type="primary", use_container_width=True, help="Reset everything and start fresh"):
+        st.session_state.pop("rs", None)
+        init_state()
+        st.success("Round reset. Enter player names to begin.")
+        st.rerun()
 
 if __name__ == "__main__":
     main()
