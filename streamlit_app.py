@@ -10,45 +10,68 @@ import pandas as pd
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
-# -------------------------- THEME & FX CSS ------------------------------------
+# -------------------------- THEME & FX CSS (Masters board) --------------------
 GOLF_CSS = """
 <style>
-:root { --golf-green:#0b7a24; --golf-dark:#064a15; --ink:#0b0e11; }
-section.main { background: radial-gradient(1200px 600px at 10% -10%, #ffffff, #eaf7e7) }
-.block-container { padding-top: .8rem; }
+:root {
+  --masters-green:#0b5d1e;
+  --masters-deep:#084717;
+  --trim-gold:#d4af37;
+  --card-ink:#0b0e11;
+  --chip-green:#0b7a24;
+}
+section.main{background:radial-gradient(1200px 620px at 15% -20%, #ffffff, #eaf7e7)}
+.block-container{padding-top:.8rem}
 
 /* Header */
-.golf-hero{padding:.8rem 1rem;border-radius:12px;background:linear-gradient(135deg,var(--golf-green),var(--golf-dark));color:#fff;display:flex;align-items:center;gap:14px}
+.golf-hero{padding:.8rem 1rem;border-radius:12px;background:linear-gradient(135deg,var(--chip-green),#064a15);color:#fff;display:flex;align-items:center;gap:14px}
 .golf-badge{background:#ffffff22;padding:6px 10px;border-radius:10px;font-weight:800}
 
 /* Team chips */
-.team-card{border:3px solid var(--golf-green);border-radius:16px;padding:14px;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.08)}
-.player-chip{position:relative;display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:14px;border:2px solid var(--golf-green);background:#fff;margin:6px 6px;flex-wrap:wrap}
+.player-chip{position:relative;display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:14px;border:2px solid var(--chip-green);background:#fff;margin:6px 6px;flex-wrap:wrap}
 .player-name{font-weight:900;font-size:1.05rem;color:#0c0c0c}
-.player-meta{font-weight:800;color:#0b7a24;background:#eaf7e7;border:1px solid #bde0c2;border-radius:999px;padding:4px 10px}
+.player-meta{font-weight:800;color:var(--chip-green);background:#eaf7e7;border:1px solid #bde0c2;border-radius:999px;padding:4px 10px}
 .tie-badge{font-weight:900;background:#fff3bf;color:#8a6700;border:1px solid #e3c200;border-radius:8px;padding:2px 8px}
 
 /* +1 animation */
 .plus1{position:absolute;right:-8px;top:-10px;background:#10b981;color:#fff;border-radius:999px;
        padding:2px 8px;font-weight:900;border:2px solid #0f9e70;opacity:0;transform:translateY(6px) scale(.8);
        animation:plusOne 1s ease-out forwards}
-@keyframes plusOne{0%{opacity:0;transform:translateY(6px) scale(.8)}
-  15%{opacity:1;transform:translateY(-2px) scale(1)} 80%{opacity:.9}
-  100%{opacity:0;transform:translateY(-18px) scale(.9)}}
-
-/* Leaderboard */
-.leaderboard-wrap{margin-top:.2rem}
-.lb-row{border-radius:18px;padding:14px 16px;background:#0f1420;border:2px solid #1f2630;box-shadow:0 6px 22px rgba(0,0,0,.25);color:#eef2f7;margin-bottom:10px}
-.lb-name{font-family:'Trebuchet MS','Segoe UI',system-ui,sans-serif;font-weight:900;font-size:1.2rem;color:#fff;display:flex;align-items:center;gap:8px}
-.lb-lines{display:flex;gap:12px;margin-top:6px;flex-wrap:wrap}
-.lb-tag{background:#0a0f1a;border:1px solid #2a3546;border-radius:999px;padding:6px 12px;font-weight:800;color:#dfe7f4}
 .lb-plus1{margin-left:8px;background:#10b981;color:#fff;border:1px solid #0f9e70;border-radius:999px;padding:2px 8px;font-weight:900;opacity:0;transform:translateY(6px) scale(.8);animation:plusOne 1s ease-out forwards}
+@keyframes plusOne{0%{opacity:0;transform:translateY(6px) scale(.8)}
+ 15%{opacity:1;transform:translateY(-2px) scale(1)} 80%{opacity:.9}
+ 100%{opacity:0;transform:translateY(-18px) scale(.9)}}
 
-/* Buttons */
-div.stButton > button[kind="primary"]{ background:#c0392b;border-color:#8e2a1b;color:#fff; }
-div.stButton > button[kind="primary"]:hover{ background:#a33224; }
+/* ------- Masters-style Leaderboard ------- */
+.masters-wrap{margin-top:.3rem;border:3px solid var(--trim-gold);border-radius:18px;
+  background:
+    linear-gradient(0deg, #0e6b22, #0e6b22) padding-box,
+    linear-gradient(135deg, #ffe793, var(--trim-gold)) border-box;
+  padding:10px; box-shadow:0 14px 40px rgba(0,0,0,.25);
+}
+.mast-head{display:flex;align-items:center;justify-content:space-between;
+  background:linear-gradient(#0d5a1f,#0a4d1b); color:#fff;border:2px solid #0a4519;
+  border-radius:12px; padding:8px 12px; margin-bottom:10px}
+.mast-title{font-family:Georgia, 'Times New Roman', serif; font-weight:900; letter-spacing:.6px; font-size:1.3rem}
+.mast-pill{background:#0f7226;border:1px solid #0a4d1b;border-radius:999px;padding:4px 10px;font-weight:800}
 
-/* FX (animation only; no audio) */
+/* board rows */
+.mrow{display:grid;grid-template-columns:74px 1fr auto; align-items:center;
+  background:#0f1420; border:1px solid #1f2630; border-radius:12px; margin:8px 4px; color:#eef2f7;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04), 0 6px 18px rgba(0,0,0,.25)}
+.mcell{padding:10px 12px}
+.rank-medal{display:flex;align-items:center;justify-content:center; gap:6px; font-weight:900; border-radius:10px;
+  border:2px solid #2a3546; background:#0a0f1a; padding:10px 12px; width:66px}
+.rank-medal.gold{background:linear-gradient(#3e2e00,#2c2000); border-color:#a08100; color:#ffd44d}
+.rank-medal.silver{background:linear-gradient(#3a3f47,#2b2f36); border-color:#b9c5d1; color:#e3edf7}
+.rank-medal.bronze{background:linear-gradient(#3a2e23,#2a2119); border-color:#d19662; color:#f1c197}
+.player-box{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pname{font-family:Georgia,'Times New Roman',serif;font-weight:900;font-size:1.2rem;letter-spacing:.3px;color:#fff}
+.tie-note{background:#fff3bf;color:#8a6700;border:1px solid #e3c200;border-radius:8px;padding:2px 8px;font-weight:900}
+.badges{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-right:10px}
+.badge{background:#0a0f1a;border:1px solid #2a3546;border-radius:999px;padding:6px 12px;font-weight:800;color:#dfe7f4}
+
+/* FX (ball only; no audio) */
 .fx-area{position:relative;height:70px;overflow:hidden;margin:.2rem 0 .6rem 0}
 .fx-ball{position:absolute;left:-60px;top:36px;width:16px;height:16px;border-radius:50%;background:radial-gradient(circle at 40% 35%, #fff, #dcdcdc);box-shadow:0 2px 0 #bcbcbc;animation:drive .9s ease-out forwards, spin .9s linear}
 .fx-shadow{position:absolute;left:-60px;top:53px;width:20px;height:6px;border-radius:50%;background:rgba(0,0,0,.25);filter:blur(2px);animation:shadowDrive .9s ease-out forwards}
@@ -156,12 +179,12 @@ def set_players(players: List[str]) -> None:
 def ordinal(n: int) -> str:
     return f"{n}{'th' if 10<=n%100<=20 else {1:'st',2:'nd',3:'rd'}.get(n%10,'th')}"
 
-def compute_ties(players: List[str], points: Dict[str, int]) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """Return (place_label, tie_note) where tie_note explains who & place."""
-    # order players by pts desc then name
+def compute_ties(players: List[str], points: Dict[str, int]) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, int]]:
+    """Return (place_label, tie_note, numeric_rank)."""
     ordered = sorted(((p, points.get(p, 0)) for p in players), key=lambda kv: (-kv[1], kv[0]))
     labels: Dict[str, str] = {}
     notes: Dict[str, str] = {}
+    ranks: Dict[str, int] = {}
     i = 0; rank = 0
     while i < len(ordered):
         j = i + 1
@@ -172,13 +195,13 @@ def compute_ties(players: List[str], points: Dict[str, int]) -> Tuple[Dict[str, 
         if len(group) > 1:
             for p in group:
                 labels[p] = f"T-{rank}"
+                ranks[p] = rank
                 others = [x for x in group if x != p]
                 notes[p] = f"tied with {', '.join(others)} for {ordinal(rank)}"
         else:
-            labels[group[0]] = str(rank)
-            notes[group[0]] = ""
+            labels[group[0]] = str(rank); ranks[group[0]] = rank; notes[group[0]] = ""
         i = j
-    return labels, notes
+    return labels, notes, ranks
 
 def record_winner(team_name: str) -> None:
     rs: RoundState = st.session_state.rs
@@ -191,32 +214,25 @@ def record_winner(team_name: str) -> None:
     rs.hole_winners[idx] = team_name
     rs.history.append({"hole": rs.current_hole, "Team A": rs.teams["Team A"][:], "Team B": rs.teams["Team B"][:], "Winner": team_name})
     rs.toast = f"🏆 Hole {rs.current_hole}: {team_name} – +1 to " + ", ".join(winners) if winners else f"🏆 Hole {rs.current_hole}: {team_name}"
-    # +1 animation (visible ~1s)
-    rs.plus1_players = winners
-    rs.plus1_until = time.time() + 1.2
+    rs.plus1_players = winners; rs.plus1_until = time.time() + 1.2
     if rs.current_hole == 18:
         rs.show_results = True
     else:
-        rs.current_hole += 1
-        rs.teams = random_pair(rs.players)
+        rs.current_hole += 1; rs.teams = random_pair(rs.players)
 
 def undo_last_hole() -> None:
     rs: RoundState = st.session_state.rs
-    if not rs.history:
-        return
+    if not rs.history: return
     last = rs.history.pop()
     hole = last["hole"]; winner_team = last["Winner"]
     losers = []
     for p in last[winner_team]:
         if p in rs.players:
-            rs.points[p] = max(0, rs.points.get(p, 0) - 1)
-            losers.append(p)
-    rs.hole_winners[hole - 1] = None
-    rs.current_hole = hole
+            rs.points[p] = max(0, rs.points.get(p, 0) - 1); losers.append(p)
+    rs.hole_winners[hole - 1] = None; rs.current_hole = hole
     rs.teams = {"Team A": last["Team A"], "Team B": last["Team B"]}
-    rs.show_results = False
-    rs.toast = f"↩️ Undid hole {hole}: removed 1 from " + ", ".join(losers) if losers else f"↩️ Undid hole {hole}"
-    rs.plus1_players = []  # no +1 anim on undo
+    rs.show_results = False; rs.toast = f"↩️ Undid hole {hole}: removed 1 from " + ", ".join(losers) if losers else f"↩️ Undid hole {hole}"
+    rs.plus1_players = []
 
 def results_df() -> pd.DataFrame:
     rs: RoundState = st.session_state.rs
@@ -227,20 +243,17 @@ def results_df() -> pd.DataFrame:
 def render_fx():
     rs: RoundState = st.session_state.rs
     if not rs.fx_armed: return
-    rs.fx_armed = False
-    rs.fx_tick += 1
+    rs.fx_armed = False; rs.fx_tick += 1
     st.markdown(f"""
 <div class="fx-area" id="fx{rs.fx_tick}">
   <div class="fx-ball"></div>
   <div class="fx-shadow"></div>
-</div>
-""", unsafe_allow_html=True)
+</div>""", unsafe_allow_html=True)
 
 # ------------------------------ IMAGE (poster) --------------------------------
 def make_podium_image(df: pd.DataFrame) -> bytes:
     W, H = 900, 520
-    img = Image.new("RGB", (W, H), (8, 100, 40))
-    draw = ImageDraw.Draw(img)
+    img = Image.new("RGB", (W, H), (8, 100, 40)); draw = ImageDraw.Draw(img)
     draw.rectangle([(0, H - 180), (W, H)], fill=(14, 122, 36))
     slots = [
         {"x": W // 2 - 120, "w": 240, "h": 210, "color": (255, 215, 0), "rank": 1},
@@ -256,8 +269,7 @@ def make_podium_image(df: pd.DataFrame) -> bytes:
         draw.text((x0 + 10, y0 - 30), f"#{s['rank']}", fill=(255, 255, 255), font=_font(26))
         if i < len(df):
             row = df.iloc[i]
-            text = f"{row['Player']}  •  {int(row['Points'])} pts"
-            draw.text((x0 + 16, y0 + 18), text, fill=(0, 0, 0), font=_font(24))
+            draw.text((x0 + 16, y0 + 18), f"{row['Player']}  •  {int(row['Points'])} pts", fill=(0, 0, 0), font=_font(24))
     buf = io.BytesIO(); img.save(buf, format="PNG"); return buf.getvalue()
 
 def _font(size: int):
@@ -282,25 +294,48 @@ def team_block_static(team_name: str, players: List[str], points: Dict[str, int]
         for p in players:
             chip_static(p, points.get(p, 0), labels.get(p, "—"), notes.get(p, ""), p in active_plus1)
 
-def render_leaderboard(players: List[str], points: Dict[str, int],
-                       labels: Dict[str, str], notes: Dict[str, str], active_plus1: set) -> None:
+def _medal_class(rank: int) -> str:
+    if rank == 1: return "gold"
+    if rank == 2: return "silver"
+    if rank == 3: return "bronze"
+    return ""
+
+def render_leaderboard_masters(players: List[str], points: Dict[str, int],
+                               labels: Dict[str, str], notes: Dict[str, str], ranks: Dict[str, int],
+                               active_plus1: set) -> None:
     ordered = sorted(((p, points.get(p, 0)) for p in players), key=lambda kv: (-kv[1], kv[0]))
-    st.subheader("Leaderboard")
-    st.markdown("<div class='leaderboard-wrap'>", unsafe_allow_html=True)
+    st.markdown("<div class='masters-wrap'>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='mast-head'><div class='mast-title'>LEADERBOARD</div>"
+        "<div class='mast-pill'>Augusta Style</div></div>",
+        unsafe_allow_html=True,
+    )
     for p, pts in ordered:
         lab = labels.get(p, "—")
         note = notes.get(p, "")
-        tied_html = f"<span class='tie-badge'>({note})</span>" if note else ""
+        rank = ranks.get(p, 99)
+        medal = _medal_class(rank)
+        tied_html = f"<span class='tie-note'>{note}</span>" if note else ""
         plus1_html = "<span class='lb-plus1'>+1</span>" if p in active_plus1 else ""
         st.markdown(
             f"""
-<div class="lb-row">
-  <div class="lb-name">{p} {tied_html} {plus1_html}</div>
-  <div class="lb-lines">
-    <span class="lb-tag">Current Place: <b>{lab}</b></span>
-    <span class="lb-tag">Total Points: <b>{pts}</b></span>
+<div class="mrow">
+  <div class="mcell">
+     <div class="rank-medal {medal}">#{rank}</div>
   </div>
-</div>""",
+  <div class="mcell">
+     <div class="player-box">
+        <span class="pname">{p}</span> {tied_html} {plus1_html}
+     </div>
+  </div>
+  <div class="mcell">
+     <div class="badges">
+        <span class="badge">Current Place: <b>{lab}</b></span>
+        <span class="badge">Total Points: <b>{pts}</b></span>
+     </div>
+  </div>
+</div>
+""",
             unsafe_allow_html=True,
         )
     st.markdown("</div>", unsafe_allow_html=True)
@@ -312,15 +347,11 @@ def main():
     st.markdown(GOLF_CSS, unsafe_allow_html=True)
     rs: RoundState = st.session_state.rs
 
-    # Toasts
     if rs.toast:
-        st.toast(rs.toast)
-        rs.toast = None
+        st.toast(rs.toast); rs.toast = None
 
-    # Subtle animation
     render_fx()
 
-    # Results on 18
     if rs.show_results:
         st.success("Round complete! 🎉 Final results below.")
         df_res = results_df()
@@ -334,13 +365,11 @@ def main():
                                data=pd.DataFrame(rs.history).to_csv(index=False).encode("utf-8"),
                                file_name="golf_hole_log.csv", mime="text/csv")
 
-    # Header
     st.markdown(f'<div class="golf-hero">{GOLF_SVG}'
-                f'<div><div class="golf-badge">Random Teams • Score • Live Leaderboard</div>'
+                f'<div><div class="golf-badge">Random Teams • Score • Masters-style Leaderboard</div>'
                 f'<div style="opacity:.9">+1 to each winner • Auto-randomize after each hole • Undo & Confirm Reset</div></div></div>',
                 unsafe_allow_html=True)
 
-    # Player inputs (hide after Hole 1)
     names_locked = (rs.hole_winners[0] is not None)
     with st.container(border=True):
         if not names_locked:
@@ -364,26 +393,22 @@ def main():
                 if st.button("🎲 Randomize Teams now", use_container_width=True, disabled=not rs.players):
                     rs.teams = random_pair(rs.players); rs.fx_armed = True; st.rerun()
         else:
-            st.markdown("**Players are locked for this round (after Hole 1). Use _End Round_ to change.**")
             roster = " • ".join(rs.players) if rs.players else "—"
+            st.markdown("**Players are locked for this round (after Hole 1). Use _End Round_ to change.**")
             st.markdown(f"Current players: **{roster}**")
 
     if not rs.players:
         st.info("Enter 2 or 4 names above to begin.")
         return
 
-    # Tie labels + notes; active +1 window
-    labels, notes = compute_ties(rs.players, rs.points)
+    labels, notes, ranks = compute_ties(rs.players, rs.points)
     active_plus1 = set(rs.plus1_players) if time.time() < rs.plus1_until else set()
     if rs.plus1_players and time.time() >= rs.plus1_until:
-        rs.plus1_players = []  # expire cleanly on next run
+        rs.plus1_players = []
 
-    # Teams
     colA, colB = st.columns(2)
-    with colA:
-        team_block_static("Team A", rs.teams["Team A"], rs.points, labels, notes, active_plus1)
-    with colB:
-        team_block_static("Team B", rs.teams["Team B"], rs.points, labels, notes, active_plus1)
+    with colA: team_block_static("Team A", rs.teams["Team A"], rs.points, labels, notes, active_plus1)
+    with colB: team_block_static("Team B", rs.teams["Team B"], rs.points, labels, notes, active_plus1)
 
     st.divider()
     st.subheader(f"Hole {rs.current_hole} / 18 • Record Winner (auto-randomizes next)")
@@ -400,10 +425,9 @@ def main():
             undo_last_hole(); rs.fx_armed = True; st.rerun()
         st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
 
-    # Leaderboard
-    render_leaderboard(rs.players, rs.points, labels, notes, active_plus1)
+    # Masters-styled leaderboard
+    render_leaderboard_masters(rs.players, rs.points, labels, notes, ranks, active_plus1)
 
-    # Hole log
     st.subheader("Hole Log")
     if rs.history:
         log_df = pd.DataFrame(rs.history)[["hole", "Team A", "Team B", "Winner"]].rename(columns={"hole": "Hole"})
@@ -411,7 +435,6 @@ def main():
     else:
         st.info("No holes recorded yet.")
 
-    # --- End Round confirm -----------------------------------------------------
     st.markdown("---")
     if st.button("🛑 End Round", type="primary", use_container_width=True):
         rs.show_end_confirm = True; st.rerun()
@@ -422,8 +445,7 @@ def main():
             "<div class='confirm-card'>"
             "<div class='confirm-title'>End Round?</div>"
             "<div class='confirm-text'>This will <b>delete all holes, teams, and points</b> for this round.</div>"
-            "</div>",
-            unsafe_allow_html=True,
+            "</div>", unsafe_allow_html=True,
         )
         c1, c2 = st.columns([1, 1])
         with c1:
