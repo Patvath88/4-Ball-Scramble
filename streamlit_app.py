@@ -3,7 +3,6 @@ import io
 import random
 import time
 from dataclasses import dataclass
-from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -33,22 +32,26 @@ div.stButton > button[kind="primary"]:hover{ background:#a33224; }
 /* Header */
 .golf-hero{padding:.8rem 1rem;border-radius:12px;background:linear-gradient(135deg,var(--chip-green),#064a15);color:#fff;display:flex;align-items:center;gap:14px}
 .golf-badge{background:#ffffff22;padding:6px 10px;border-radius:10px;font-weight:800}
+
+/* Player chips */
 .player-chip{position:relative;display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:14px;border:2px solid var(--chip-green);background:#fff;margin:6px 6px;flex-wrap:wrap}
 .player-name{font-weight:900;font-size:1.05rem;color:#0c0c0c}
 .player-meta{font-weight:800;color:var(--chip-green);background:#eaf7e7;border:1px solid #bde0c2;border-radius:999px;padding:4px 10px}
-.tie-badge,.tie-note{font-weight:900;background:#fff3bf;color:#8a6700;border:1px solid #e3c200;border-radius:8px;padding:2px 8px}
+
+/* +1 animation */
 .plus1{position:absolute;right:-8px;top:-10px;background:#10b981;color:#fff;border-radius:999px;padding:2px 8px;font-weight:900;border:2px solid #0f9e70;opacity:0;transform:translateY(6px) scale(.8);animation:plusOne 1s ease-out forwards}
 .lb-plus1{margin-left:8px;background:#10b981;color:#fff;border:1px solid #0f9e70;border-radius:999px;padding:2px 8px;font-weight:900;opacity:0;transform:translateY(6px) scale(.8);animation:plusOne 1s ease-out forwards}
 @keyframes plusOne{0%{opacity:0;transform:translateY(6px) scale(.8)} 15%{opacity:1;transform:translateY(-2px) scale(1)} 80%{opacity:.9} 100%{opacity:0;transform:translateY(-18px) scale(.9)}}
 
-/* Masters-style leaderboard (already implemented styles kept lightweight here) */
+/* ------- Masters-style Leaderboard ------- */
 .masters-wrap{margin-top:.3rem;border:3px solid var(--trim-gold);border-radius:18px;
   background:linear-gradient(0deg,#0e6b22,#0e6b22) padding-box,
              linear-gradient(135deg,#ffe793,var(--trim-gold)) border-box;
   padding:10px; box-shadow:0 14px 40px rgba(0,0,0,.25);}
-.mast-head{display:flex;align-items:center;justify-content:space-between;background:linear-gradient(#0d5a1f,#0a4d1b);color:#fff;border:2px solid #0a4519;border-radius:12px;padding:8px 12px;margin-bottom:10px}
+.mast-head{display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(#0d5a1f,#0a4d1b);color:#fff;border:2px solid #0a4519;
+  border-radius:12px; padding:8px 12px; margin-bottom:10px}
 .mast-title{font-family:Georgia,'Times New Roman',serif;font-weight:900;letter-spacing:.6px;font-size:1.3rem}
-.mast-pill{background:#0f7226;border:1px solid #0a4d1b;border-radius:999px;padding:4px 10px;font-weight:800}
 .mrow{display:grid;grid-template-columns:74px 1fr auto;align-items:center;background:#0f1420;border:1px solid #1f2630;border-radius:12px;margin:8px 4px;color:#eef2f7;box-shadow:inset 0 1px 0 rgba(255,255,255,.04), 0 6px 18px rgba(0,0,0,.25)}
 .mcell{padding:10px 12px}
 .rank-medal{display:flex;align-items:center;justify-content:center;gap:6px;font-weight:900;border-radius:10px;border:2px solid #2a3546;background:#0a0f1a;padding:10px 12px;width:66px}
@@ -65,7 +68,6 @@ div.stButton > button[kind="primary"]:hover{ background:#a33224; }
 .board-card{border:4px solid #1f2630;border-radius:16px;background:#0b1322;box-shadow:0 10px 26px rgba(0,0,0,.3);padding:8px}
 .board-top{display:flex;align-items:center;justify-content:center;background:#10233d;color:#fff;border:2px solid #1c2b43;border-radius:12px;padding:6px 10px;margin:6px}
 .board-title{font-family:Georgia,'Times New Roman',serif;font-weight:900;letter-spacing:.8px}
-.board-sub{font-weight:800;background:#183a68;border:1px solid #0e2749;border-radius:999px;padding:2px 8px;margin-left:10px}
 .board-body{position:relative}
 .thru-left,.thru-right{position:absolute;top:48px;width:68px;height:calc(100% - 60px);background:#10233d;color:#e3edf7;border:2px solid #1c2b43;border-radius:10px;display:flex;align-items:flex-start;justify-content:center;padding-top:8px;font-weight:900}
 .thru-left{left:-74px} .thru-right{right:-74px}
@@ -86,8 +88,15 @@ div.stButton > button[kind="primary"]:hover{ background:#a33224; }
   .masters-wrap{padding:6px}
   .board{min-width:720px; grid-template-columns: 140px repeat(18, 34px) 60px;}
   .cell{height:32px}
-  .thru-left,.thru-right{display:none} /* hide side panels on very small screens */
+  .thru-left,.thru-right{display:none}
 }
+
+/* Confirm (blocking pane) */
+.confirm-wrap{max-width:560px;margin:16vh auto 0 auto;}
+.confirm-pane{background:#111827;border:2px solid #374151;border-radius:16px;padding:18px 18px 14px 18px;
+  box-shadow:0 18px 60px rgba(0,0,0,.5); color:#fff}
+.confirm-title{font-weight:900;font-size:1.25rem;margin-bottom:.4rem}
+.confirm-text{color:#e5e7eb;margin-bottom:.8rem}
 </style>
 """
 
@@ -132,14 +141,17 @@ def init_state() -> None:
 
 def upgrade_state() -> None:
     rs = st.session_state.rs
-    for k, v in dict(history=[], show_results=False, hole_winners=[None]*18,
-                     current_hole=1, teams={"Team A": [], "Team B": []},
-                     points={}, players=[], started_at=time.time(), fx_armed=False,
-                     fx_tick=0, show_end_confirm=False, toast=None,
-                     plus1_players=[], plus1_until=0.0).items():
+    defaults = dict(
+        history=[], show_results=False, hole_winners=[None]*18, current_hole=1,
+        teams={"Team A": [], "Team B": []}, points={}, players=[], started_at=time.time(),
+        fx_armed=False, fx_tick=0, show_end_confirm=False, toast=None,
+        plus1_players=[], plus1_until=0.0,
+    )
+    for k, v in defaults.items():
         if not hasattr(rs, k):
             setattr(rs, k, v)
-    if len(rs.hole_winners) != 18: rs.hole_winners = (rs.hole_winners + [None]*18)[:18]
+    if len(rs.hole_winners) != 18:
+        rs.hole_winners = (rs.hole_winners + [None]*18)[:18]
 
 # =============================== HELPERS ======================================
 def sanitize_players(inputs: List[str]) -> List[str]:
@@ -148,11 +160,13 @@ def sanitize_players(inputs: List[str]) -> List[str]:
         name = raw.strip()
         if name and name.lower() not in seen:
             out.append(name); seen.add(name.lower())
-    if len(out) not in (2,4): raise ValueError("Enter exactly 2 or 4 distinct names.")
+    if len(out) not in (2,4):
+        raise ValueError("Enter exactly 2 or 4 distinct names.")
     return out
 
 def random_pair(players: List[str]) -> Dict[str, List[str]]:
-    sh = players[:]; random.shuffle(sh); split = len(sh)//2 if len(sh)>=2 else 1
+    sh = players[:]; random.shuffle(sh)
+    split = len(sh)//2 if len(sh)>=2 else 1
     return {"Team A": sh[:split], "Team B": sh[split:]}
 
 def set_players(players: List[str]) -> None:
@@ -165,47 +179,64 @@ def set_players(players: List[str]) -> None:
 def ordinal(n:int)->str:
     return f"{n}{'th' if 10<=n%100<=20 else {1:'st',2:'nd',3:'rd'}.get(n%10,'th')}"
 
-def compute_ties(players: List[str], points: Dict[str,int]) -> Tuple[Dict[str,str], Dict[str,str], Dict[str,int]]:
+def compute_places(players: List[str], points: Dict[str,int]) -> Tuple[Dict[str,str], Dict[str,int], Dict[str,bool]]:
+    """Return (labels, ranks, tied_map). labels like 'T-1' or '1'."""
     ordered = sorted(((p, points.get(p,0)) for p in players), key=lambda kv:(-kv[1], kv[0]))
-    labels:Dict[str,str]={}; notes:Dict[str,str]={}; ranks:Dict[str,int]={}
+    labels:Dict[str,str]={}; ranks:Dict[str,int]={}; tied:Dict[str,bool]={}
     i=0; rank=0
     while i < len(ordered):
         j=i+1
-        while j<len(ordered) and ordered[j][1]==ordered[i][1]: j+=1
+        while j<len(ordered) and ordered[j][1]==ordered[i][1]:
+            j+=1
         group=[p for p,_ in ordered[i:j]]; rank+=1
-        if len(group)>1:
-            for p in group:
-                labels[p]=f"T-{rank}"; ranks[p]=rank
-                others=[x for x in group if x!=p]
-                notes[p]=f"tied with {', '.join(others)} for {ordinal(rank)}"
-        else:
-            labels[group[0]]=str(rank); ranks[group[0]]=rank; notes[group[0]]=""
+        is_tied = len(group)>1
+        for p in group:
+            labels[p] = f"T-{rank}" if is_tied else str(rank)
+            ranks[p] = rank
+            tied[p] = is_tied
         i=j
-    return labels, notes, ranks
+    return labels, ranks, tied
+
+def place_text(label: str, rank: int) -> str:
+    """Display-friendly place: '1st' or 'T-1st'."""
+    ord_txt = ordinal(rank)
+    return f"T-{ord_txt}" if label.startswith("T-") else ord_txt
 
 def record_winner(team_name: str) -> None:
     rs: RoundState = st.session_state.rs
     idx = rs.current_hole - 1
-    if idx<0 or idx>17 or rs.hole_winners[idx] is not None: return
+    if idx<0 or idx>17 or rs.hole_winners[idx] is not None:
+        return
     winners = [p for p in rs.teams.get(team_name, []) if p in rs.players]
-    for p in winners: rs.points[p] = rs.points.get(p, 0) + 1
+    for p in winners:
+        rs.points[p] = rs.points.get(p, 0) + 1
     rs.hole_winners[idx]=team_name
     rs.history.append({"hole": rs.current_hole, "Team A": rs.teams["Team A"][:], "Team B": rs.teams["Team B"][:], "Winner": team_name})
-    rs.toast = f"🏆 Hole {rs.current_hole}: {team_name} – +1 to " + ", ".join(winners) if winners else f"🏆 Hole {rs.current_hole}: {team_name}"
-    rs.plus1_players = winners; rs.plus1_until = time.time()+1.2
-    if rs.current_hole==18: rs.show_results=True
-    else: rs.current_hole += 1; rs.teams = random_pair(rs.players)
+    rs.toast = (f"🏆 Hole {rs.current_hole}: {team_name} – +1 to " + ", ".join(winners)) if winners else f"🏆 Hole {rs.current_hole}: {team_name}"
+    rs.plus1_players = winners
+    rs.plus1_until = time.time()+1.2
+    if rs.current_hole==18:
+        rs.show_results=True
+    else:
+        rs.current_hole += 1
+        rs.teams = random_pair(rs.players)
 
 def undo_last_hole() -> None:
     rs: RoundState = st.session_state.rs
-    if not rs.history: return
+    if not rs.history:
+        return
     last = rs.history.pop()
     hole = last["hole"]; winner_team = last["Winner"]
     losers=[]
     for p in last[winner_team]:
-        if p in rs.players: rs.points[p]=max(0, rs.points.get(p,0)-1); losers.append(p)
-    rs.hole_winners[hole-1]=None; rs.current_hole=hole; rs.teams={"Team A":last["Team A"], "Team B":last["Team B"]}
-    rs.show_results=False; rs.toast = f"↩️ Undid hole {hole}: removed 1 from " + ", ".join(losers) if losers else f"↩️ Undid hole {hole}"
+        if p in rs.players:
+            rs.points[p]=max(0, rs.points.get(p,0)-1)
+            losers.append(p)
+    rs.hole_winners[hole-1]=None
+    rs.current_hole=hole
+    rs.teams={"Team A":last["Team A"], "Team B":last["Team B"]}
+    rs.show_results=False
+    rs.toast = (f"↩️ Undid hole {hole}: removed 1 from " + ", ".join(losers)) if losers else f"↩️ Undid hole {hole}"
     rs.plus1_players=[]
 
 def results_df() -> pd.DataFrame:
@@ -216,8 +247,10 @@ def results_df() -> pd.DataFrame:
 # ---------- FX (ball only) ----------
 def render_fx():
     rs: RoundState = st.session_state.rs
-    if not rs.fx_armed: return
-    rs.fx_armed=False; rs.fx_tick+=1
+    if not rs.fx_armed:
+        return
+    rs.fx_armed=False
+    rs.fx_tick+=1
     st.markdown(f"""
 <div style="position:relative;height:70px;overflow:hidden;margin:.2rem 0 .6rem 0">
   <div style="position:absolute;left:-60px;top:36px;width:16px;height:16px;border-radius:50%;
@@ -233,16 +266,20 @@ def build_win_map(players: List[str], history: List[Dict]) -> Dict[str, List[boo
     win_map = {p: [False]*18 for p in players}
     for entry in history:
         h = entry["hole"]
-        if not (1 <= h <= 18): continue
+        if not (1 <= h <= 18):
+            continue
         winners = entry.get(entry.get("Winner",""), [])
         for p in winners:
-            if p in win_map: win_map[p][h-1] = True
+            if p in win_map:
+                win_map[p][h-1] = True
     return win_map
 
 # ========================= IMAGE (results poster) =============================
 def _font(size:int):
-    try: return ImageFont.truetype("DejaVuSans.ttf", size)
-    except Exception: return ImageFont.load_default()
+    try:
+        return ImageFont.truetype("DejaVuSans.ttf", size)
+    except Exception:
+        return ImageFont.load_default()
 
 def make_podium_image(df: pd.DataFrame) -> bytes:
     W,H=900,520
@@ -258,53 +295,64 @@ def make_podium_image(df: pd.DataFrame) -> bytes:
         x0=s["x"]; y0=base-s["h"]
         d.rounded_rectangle([(x0,y0),(x0+s["w"],base)],12, fill=s["c"])
         if i < len(df):
-            row=df.iloc[i]; d.text((x0+16,y0+18), f"{row['Player']} • {int(row['Points'])} pts", fill=(0,0,0), font=_font(24))
+            row=df.iloc[i]
+            d.text((x0+16,y0+18), f"{row['Player']} • {int(row['Points'])} pts", fill=(0,0,0), font=_font(24))
     buf=io.BytesIO(); img.save(buf, format="PNG"); return buf.getvalue()
 
 # ============================== UI PARTS ======================================
-def chip(player:str, pts:int, place:str, note:str, plus1:bool):
-    tied_html = f"<span class='tie-badge'>({note})</span>" if note else ""
+def chip(player:str, pts:int, place_display:str, plus1:bool):
     plus_html = "<span class='plus1'>+1</span>" if plus1 else ""
-    st.markdown(f"<div class='player-chip'>🏁 <span class='player-name'>{player}</span> {tied_html} "
-                f"<span class='player-meta'>Current Place: {place}</span> "
-                f"<span class='player-meta'>Total Points: {pts}</span>{plus_html}</div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='player-chip'>🏁 <span class='player-name'>{player}</span> "
+        f"<span class='player-meta'>Current Place: {place_display}</span> "
+        f"<span class='player-meta'>Total Points: {pts}</span>{plus_html}</div>",
+        unsafe_allow_html=True,
+    )
 
-def team_block(title:str, players:List[str], points:Dict[str,int], labels:Dict[str,str], notes:Dict[str,str], active:set):
+def team_block(title:str, players:List[str], points:Dict[str,int],
+               labels:Dict[str,str], ranks:Dict[str,int], active:set):
     st.markdown(f"#### {title}")
     with st.container(border=True):
-        for p in players: chip(p, points.get(p,0), labels.get(p,"—"), notes.get(p,""), p in active)
+        for p in players:
+            place_disp = place_text(labels.get(p,""), ranks.get(p,99))
+            chip(p, points.get(p,0), place_disp, p in active)
 
 def _medal_class(rank:int)->str:
     return "gold" if rank==1 else "silver" if rank==2 else "bronze" if rank==3 else ""
 
-def render_masters_leaderboard(players:List[str], points:Dict[str,int], labels:Dict[str,str], notes:Dict[str,str], ranks:Dict[str,int], active:set):
+def render_masters_leaderboard(players:List[str], points:Dict[str,int],
+                               labels:Dict[str,str], ranks:Dict[str,int],
+                               active:set):
     ordered = sorted(((p, points.get(p,0)) for p in players), key=lambda kv:(-kv[1], kv[0]))
     st.markdown("<div class='masters-wrap'>", unsafe_allow_html=True)
-    st.markdown("<div class='mast-head'><div class='mast-title'>LEADERBOARD</div><div class='mast-pill'>Augusta Style</div></div>", unsafe_allow_html=True)
+    st.markdown("<div class='mast-head'><div class='mast-title'>LEADERBOARD</div></div>", unsafe_allow_html=True)
     for p,pts in ordered:
-        rank=ranks.get(p,99); medal=_medal_class(rank)
-        tied_html = f"<span class='tie-note'>{notes.get(p,'')}</span>" if notes.get(p) else ""
+        rank=ranks.get(p,99)
+        medal=_medal_class(rank)
         plus_html = "<span class='lb-plus1'>+1</span>" if p in active else ""
-        st.markdown(f"""
+        place_disp = place_text(labels.get(p,""), rank)
+        st.markdown(
+            f"""
 <div class="mrow">
   <div class="mcell"><div class="rank-medal {medal}">#{rank}</div></div>
-  <div class="mcell"><div class="player-box"><span class="pname">{p}</span> {tied_html} {plus_html}</div></div>
+  <div class="mcell"><div class="player-box"><span class="pname">{p}</span> {plus_html}</div></div>
   <div class="mcell"><div class="badges">
-      <span class="badge">Current Place: <b>{labels.get(p,'—')}</b></span>
+      <span class="badge">Current Place: <b>{place_disp}</b></span>
       <span class="badge">Total Points: <b>{pts}</b></span>
   </div></div>
 </div>
-""", unsafe_allow_html=True)
+""",
+            unsafe_allow_html=True,
+        )
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ---------- Cartoon Masters Scoreboard ----------
-def render_cartoon_scoreboard(players: List[str], points: Dict[str,int], win_map: Dict[str, List[bool]], thru: int):
+def render_cartoon_scoreboard(players: List[str], points: Dict[str,int],
+                              win_map: Dict[str, List[bool]], thru: int):
     st.subheader("Scoreboard")
     st.markdown("<div class='board-wrap'>", unsafe_allow_html=True)
     st.markdown("<div class='board-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='board-top'><div class='board-title'>LEADERS</div>"
-                "<div class='board-sub'>Cartoon Masters Board</div></div>", unsafe_allow_html=True)
-    # Side panels (hidden on small screens)
+    st.markdown("<div class='board-top'><div class='board-title'>LEADERS</div></div>", unsafe_allow_html=True)
     st.markdown(f"<div class='board-body'><div class='thru-left'>THRU {min(thru,9)}</div>"
                 f"<div class='thru-right'>THRU {thru}</div>", unsafe_allow_html=True)
     st.markdown("<div class='x-scroll'>", unsafe_allow_html=True)
@@ -400,15 +448,15 @@ def main():
         st.info("Enter 2 or 4 names above to begin.")
         return
 
-    # Tie labels + ranks; +1 window
-    labels, notes, ranks = compute_ties(rs.players, rs.points)
+    # Places / ranks; +1 window
+    labels, ranks, _tied = compute_places(rs.players, rs.points)
     active_plus1 = set(rs.plus1_players) if time.time() < rs.plus1_until else set()
     if rs.plus1_players and time.time() >= rs.plus1_until: rs.plus1_players=[]
 
     # Teams
     cA,cB = st.columns(2)
-    with cA: team_block("Team A", rs.teams["Team A"], rs.points, labels, notes, active_plus1)
-    with cB: team_block("Team B", rs.teams["Team B"], rs.points, labels, notes, active_plus1)
+    with cA: team_block("Team A", rs.teams["Team A"], rs.points, labels, ranks, active_plus1)
+    with cB: team_block("Team B", rs.teams["Team B"], rs.points, labels, ranks, active_plus1)
 
     # Sticky winner controls (mobile friendly)
     with st.container():
@@ -428,14 +476,14 @@ def main():
             st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # Fancy leaderboard (Masters-style cards)
-    render_masters_leaderboard(rs.players, rs.points, labels, notes, ranks, active_plus1)
+    # Masters leaderboard
+    render_masters_leaderboard(rs.players, rs.points, labels, ranks, active_plus1)
 
     # Cartoon Masters scoreboard (swipeable on mobile)
     win_map = build_win_map(rs.players, rs.history)
     render_cartoon_scoreboard(rs.players, rs.points, win_map, thru=rs.current_hole-1)
 
-    # Hole log table (collapsible feel: show only when there is history)
+    # Hole log
     st.subheader("Hole Log")
     if rs.history:
         log_df = pd.DataFrame(rs.history)[["hole","Team A","Team B","Winner"]].rename(columns={"hole":"Hole"})
@@ -443,6 +491,7 @@ def main():
     else:
         st.info("No holes recorded yet.")
 
+    # Trigger confirm
     st.markdown("---")
     if st.button("🛑 End Round", type="primary", use_container_width=True):
         rs.show_end_confirm = True; st.rerun()
