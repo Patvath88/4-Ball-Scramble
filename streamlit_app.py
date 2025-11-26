@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
-# -------------------------- THEME (dark leaderboard + animations) -------------
+# -------------------------- THEME (dark, high-contrast) -----------------------
 GOLF_CSS = """
 <style>
 :root { --golf-green:#0b7a24; --golf-dark:#064a15; --sand:#f3e6c1; --ink:#0b0e11; }
@@ -29,32 +29,21 @@ section.main { background: radial-gradient(1200px 600px at 10% -10%, #ffffff, #e
 .team-card{border:3px solid var(--golf-green);border-radius:16px;padding:14px;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.08)}
 .player-chip{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:14px;border:2px solid var(--golf-green);background:#fff;opacity:1 !important;margin:6px 6px;flex-wrap:wrap}
 .player-name{font-weight:900;font-size:1.05rem;color:#0c0c0c !important}
-.player-meta{font-weight:800; color:#0b7a24; background:#eaf7e7; border:1px solid #bde0c2; border-radius:999px; padding:4px 10px;}
+.player-meta{font-weight:800; color:#0b7a24; background:#eaf7e7; border:1px solid #bde0c2; border-radius:999px; padding:4px 10px}
 
-/* --- DARK LEADERBOARD --- */
+/* --- DARK LEADERBOARD (no streaks) --- */
 .leaderboard-wrap{margin-top:.2rem}
-.lb-row{display:grid;grid-template-columns:64px 1fr;gap:12px;align-items:center;
-       border-radius:18px;padding:12px 14px;background:#12161c;border:2px solid #1f2630;
-       box-shadow:0 6px 22px rgba(0,0,0,.25); color:#eef2f7;}
-.lb-row + .lb-row{margin-top:10px}
-.lb-left{display:flex;align-items:center;justify-content:center}
-.medal{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-      font-weight:900;color:#111;box-shadow:inset 0 -4px 8px rgba(0,0,0,.25),0 2px 6px rgba(0,0,0,.35);
-      font-family:'Impact','Arial Black','Trebuchet MS',system-ui,sans-serif}
-.medal.gold{background:#f1c40f;border:3px solid #9a7d0a;color:#111}
-.medal.silver{background:#bdc3c7;border:3px solid #7f8c8d;color:#111}
-.medal.bronze{background:#cd7f32;border:3px solid #8a4f1d;color:#111}
-.medal.plain{background:transparent;border:3px solid #3a4452;color:#eef2f7;box-shadow:none}
-
+.lb-row{border-radius:18px;padding:14px 16px;background:#0f1420;border:2px solid #1f2630;
+       box-shadow:0 6px 22px rgba(0,0,0,.25); color:#eef2f7; margin-bottom:10px}
 .lb-name{font-family:'Trebuchet MS','Segoe UI',system-ui,sans-serif;font-weight:900;font-size:1.2rem;letter-spacing:.2px;color:#fff}
-.lb-meta{display:flex;gap:16px;margin-top:4px;color:#cfd7e3;font-weight:700}
-.lb-meta span{background:#0e1218;border:1px solid #263141;border-radius:999px;padding:4px 10px}
+.lb-lines{display:flex;gap:12px;margin-top:6px;flex-wrap:wrap}
+.lb-tag{background:#0a0f1a;border:1px solid #2a3546;border-radius:999px;padding:6px 12px;font-weight:800;color:#dfe7f4}
 
 /* Primary buttons -> red for End Round only */
 div.stButton > button[kind="primary"]{ background:#c0392b;border-color:#8e2a1b;color:#fff; }
 div.stButton > button[kind="primary"]:hover{ background:#a33224; }
 
-/* --- Golf FX animation (shown right after a button press) --- */
+/* Golf FX */
 .fx-area{position:relative;height:80px;overflow:hidden;margin:.2rem 0 .6rem 0}
 .fx-ball{position:absolute;left:-60px;top:40px;width:18px;height:18px;border-radius:50%;
          background:radial-gradient(circle at 40% 35%, #fff, #dcdcdc);
@@ -176,15 +165,6 @@ def ordinal_ranks(players: List[str], points: Dict[str, int]) -> Dict[str, int]:
     ordered = sorted(players, key=lambda p: (-points.get(p, 0), p))
     return {p: i + 1 for i, p in enumerate(ordered)}
 
-def current_streak(player: str) -> int:
-    rs: RoundState = st.session_state.rs
-    streak = 0
-    for entry in reversed(rs.history):
-        winners = entry["Team A"] if entry["Winner"] == "Team A" else entry["Team B"]
-        if player in winners: streak += 1
-        else: break
-    return streak
-
 def combo_stats() -> pd.DataFrame:
     rs: RoundState = st.session_state.rs
     if len(rs.players) < 2: return pd.DataFrame(columns=["Pair", "Times Teamed", "% of 18"])
@@ -199,14 +179,13 @@ def combo_stats() -> pd.DataFrame:
 
 # ------------------------------ FUN FX (audio + animation) --------------------
 def _make_thwack_wav_bytes(duration_s: float = 0.18, sr: int = 44100) -> bytes:
-    """Simple synthetic 'thwack' (two tones + noise burst with fast decay)."""
     n = int(duration_s * sr)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(sr)
         for i in range(n):
             t = i / sr
-            env = math.exp(-14 * t)  # fast decay
+            env = math.exp(-14 * t)
             tone = math.sin(2 * math.pi * 220 * t) * 0.5 + math.sin(2 * math.pi * 1200 * t) * 0.25
             noise = (random.random() * 2 - 1) * 0.25 * math.exp(-30 * t)
             sample = max(-1.0, min(1.0, (tone + noise) * env))
@@ -216,13 +195,10 @@ def _make_thwack_wav_bytes(duration_s: float = 0.18, sr: int = 44100) -> bytes:
 _THWACK_B64 = base64.b64encode(_make_thwack_wav_bytes()).decode("ascii")
 
 def render_fx():
-    """If armed, show one-shot animation + play thwack; then disarm."""
     rs: RoundState = st.session_state.rs
-    if not rs.fx_armed:
-        return
+    if not rs.fx_armed: return
     rs.fx_armed = False
     rs.fx_tick += 1
-    # Animation (re-renders each tick)
     st.markdown(f"""
 <div class="fx-area" id="fx{rs.fx_tick}">
   <div class="fx-ball"></div>
@@ -265,12 +241,13 @@ def _font(size: int):
 
 # ------------------------------ UI COMPONENTS ---------------------------------
 def chip_with_editor(player: str, points: int, rank: int) -> None:
-    """No rank bubble; show meta text 'Current Place: X • Total Points: Y'."""
+    """Team chip meta text only."""
     col_chip, col_plus, col_minus, col_num = st.columns([3, 1, 1, 1.3])
     with col_chip:
         st.markdown(
             f"<div class='player-chip'>🏁 <span class='player-name'>{player}</span> "
-            f"<span class='player-meta'>Current Place: {rank} &nbsp;•&nbsp; Total Points: {points}</span></div>",
+            f"<span class='player-meta'>Current Place: {rank}</span> "
+            f"<span class='player-meta'>Total Points: {points}</span></div>",
             unsafe_allow_html=True,
         )
     with col_plus:
@@ -291,23 +268,18 @@ def team_block_editable(team_name: str, players: List[str], points: Dict[str, in
         for p in players: chip_with_editor(p, points.get(p, 0), ranks.get(p, 0))
 
 def render_leaderboard(points: Dict[str, int], players: List[str]) -> None:
-    ranks = ordinal_ranks(players, points)
+    """Sorted by points; shows only Current Place + Total Points."""
     order = sorted(players, key=lambda p: (-points.get(p, 0), p))
     st.subheader("Leaderboard")
     st.markdown("<div class='leaderboard-wrap'>", unsafe_allow_html=True)
     for i, p in enumerate(order, start=1):
-        medal_cls = "gold" if i == 1 else "silver" if i == 2 else "bronze" if i == 3 else "plain"
-        pts = points.get(p, 0); streak = current_streak(p)
+        pts = points.get(p, 0)
         row_html = f"""
 <div class="lb-row">
-  <div class="lb-left"><div class="medal {medal_cls}">#{i}</div></div>
-  <div>
-    <div class="lb-name">{p}</div>
-    <div class="lb-meta">
-      <span>Points: <b>{pts}</b></span>
-      <span>Streak: <b>{streak}</b></span>
-      <span>Rank: <b>{ranks[p]}</b></span>
-    </div>
+  <div class="lb-name">{p}</div>
+  <div class="lb-lines">
+    <span class="lb-tag">Current Place: <b>{i}</b></span>
+    <span class="lb-tag">Total Points: <b>{pts}</b></span>
   </div>
 </div>"""
         st.markdown(row_html, unsafe_allow_html=True)
@@ -321,30 +293,21 @@ def main():
 
     rs: RoundState = st.session_state.rs
 
-    # Render FX if armed from last interaction
+    # FX (from last interaction)
     render_fx()
 
-    # Results auto on 18
+    # Results on 18
     if rs.show_results:
         st.success("Round complete! 🎉 Final results below.")
         df_res = results_df()
         st.dataframe(df_res, use_container_width=True, hide_index=True)
-        top = df_res.head(3)
-        st.markdown(
-            f"""
-<div class="podium">
-  <div class="slot second"><div style="font-weight:800;">2nd</div><div style="font-weight:900;">{(top.iloc[1]['Player'] if len(top)>1 else '—')}</div><div class="small">Points: {(int(top.iloc[1]['Points']) if len(top)>1 else 0)}</div></div>
-  <div class="slot first"><div style="font-weight:800;">1st</div><div style="font-weight:900;">{(top.iloc[0]['Player'] if len(top)>0 else '—')}</div><div class="small">Points: {(int(top.iloc[0]['Points']) if len(top)>0 else 0)}</div></div>
-  <div class="slot third"><div style="font-weight:800;">3rd</div><div style="font-weight:900;">{(top.iloc[2]['Player'] if len(top)>2 else '—')}</div><div class="small">Points: {(int(top.iloc[2]['Points']) if len(top)>2 else 0)}</div></div>
-</div>""",
-            unsafe_allow_html=True,
-        )
         png = make_podium_image(df_res)
         st.download_button("🖼️ Save Results Poster (PNG)", data=png, file_name="golf_results.png", mime="image/png")
         st.download_button("📄 Save Standings (CSV)", data=df_res.to_csv(index=False).encode("utf-8"),
                            file_name="golf_standings.csv", mime="text/csv")
         if rs.history:
-            st.download_button("📄 Save Hole Log (CSV)", data=pd.DataFrame(rs.history).to_csv(index=False).encode("utf-8"),
+            st.download_button("📄 Save Hole Log (CSV)",
+                               data=pd.DataFrame(rs.history).to_csv(index=False).encode("utf-8"),
                                file_name="golf_hole_log.csv", mime="text/csv")
 
     # Header
@@ -403,10 +366,10 @@ def main():
         with m:
             st.metric("Holes recorded", sum(1 for w in rs.hole_winners if w is not None))
 
-        # Leaderboard (dark, readable, fun font)
+        # Leaderboard (only place + total points)
         render_leaderboard(rs.points, rs.players)
 
-        # Hole log
+        # Hole log + combo stats retained
         st.subheader("Hole Log")
         if rs.history:
             log_df = pd.DataFrame(rs.history)[["hole", "Team A", "Team B", "Winner"]].rename(columns={"hole": "Hole"})
